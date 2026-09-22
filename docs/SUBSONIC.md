@@ -2,8 +2,30 @@
 
 BitChord can stream from a Subsonic-compatible server — **Navidrome**,
 Airsonic, Gonic, Ampache, Jellyfin's Subsonic endpoint, and anything else that
-speaks Subsonic API 1.16.1. Your files are streamed directly from your server;
-nothing is uploaded anywhere, and no third-party service is involved.
+speaks Subsonic API 1.16.1 — and can be built around it entirely. Your files
+are streamed directly from your server; nothing is uploaded anywhere, and no
+third-party service is involved.
+
+## Using the server as the main app
+
+The first run asks which library BitChord is built around:
+
+- **My music server** — Home becomes your server's home (random tracks, newest
+  releases, playlists, artists, starred), Library becomes shelves of your own
+  library, and there is no Google account anywhere in the UI: no account
+  button, no sign-in prompts, no save/subscribe, no YouTube playlists or
+  ratings. Last.fm, ListenBrainz and Discord remain, being accounts of their
+  own. YouTube Music is still there as a *fallback*: it fills the gaps in
+  search results and plays anything your server does not hold.
+- **YouTube Music** — the app as it was, with a configured server still
+  available as a source.
+
+Switch any time from **Settings → Primary library**; the choice takes effect
+immediately, and switching back to YouTube needs no re-login (an existing
+Google session is kept, just hidden while the server is primary). If you pick
+the server with none configured yet, the server editor opens ready to take
+one.
+
 
 ## Setting it up
 

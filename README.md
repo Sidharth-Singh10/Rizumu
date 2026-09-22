@@ -65,6 +65,7 @@
 - **Discord Rich Presence** — in-app login, live track/artist/album and progress.
 - **Scrobbling** to Last.fm and ListenBrainz.
 - **Your own music server** — Navidrome, Airsonic, Gonic and other Subsonic-compatible servers: search, browse, playlists, scrobbling and lyrics from your own library. See [docs/SUBSONIC.md](docs/SUBSONIC.md).
+- **Choose your library** — the first run asks whether BitChord is built around YouTube Music or your own server; switch any time in Settings. Server mode keeps YouTube as a fallback for what the server doesn't hold, with no Google account in the UI.
 - **Pluggable sources** — add, edit, test and health-check module sources.
 
 #### Controls & Tweaks

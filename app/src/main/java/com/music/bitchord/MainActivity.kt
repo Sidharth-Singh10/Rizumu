@@ -2179,8 +2179,10 @@ private fun BitChordApp(
                                 onItemClick = onLibraryItemClick,
                                 onItemLongPress = onBrowseLongPress,
                                 // Only the Playlists shelf can grow one — see
-                                // [PlaylistShelf].
-                                onNewPlaylist = if (shelf.title == YtMusicRepository.PLAYLISTS_SHELF) {
+                                // [PlaylistShelf]. Never in server mode: the
+                                // button makes a YouTube playlist, and that
+                                // account surface is not offered there.
+                                onNewPlaylist = if (!serverMode && shelf.title == YtMusicRepository.PLAYLISTS_SHELF) {
                                     { creatingPlaylist = true }
                                 } else {
                                     null
