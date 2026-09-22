@@ -144,6 +144,7 @@ import com.music.bitchord.ui.screens.EqualizerScreen
 import com.music.bitchord.ui.screens.HistoryScreen
 import com.music.bitchord.ui.screens.ListenTogetherScreen
 import com.music.bitchord.ui.screens.SettingsScreen
+import com.music.bitchord.ui.screens.ServerLibraryScreen
 import com.music.bitchord.ui.screens.SourceEditorAlert
 import com.music.bitchord.ui.screens.SourcesScreen
 import com.music.bitchord.ui.screens.SpotifyCanvasAuthScreen
@@ -174,6 +175,7 @@ import com.music.bitchord.ui.components.BrowseActionsSheet
 import com.music.bitchord.ui.components.BrowseTarget
 import com.music.bitchord.ui.components.DownloadManagerSheet
 import com.music.bitchord.ui.components.ChoiceAlert
+import com.music.bitchord.ui.components.MessageState
 import com.music.bitchord.ui.components.PlaylistPickerSheet
 import com.music.bitchord.ui.components.TextValueAlert
 import com.music.bitchord.ui.components.SongActionsSheet
@@ -679,6 +681,17 @@ private fun BitChordApp(
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
     val serverPlaylists by viewModel.serverPlaylists.collectAsStateWithLifecycle()
     val primaryLibrary by AppSettings.primaryLibrary.collectAsStateWithLifecycle()
+    val serverHome by viewModel.serverHome.collectAsStateWithLifecycle()
+    val serverLibrary by viewModel.serverLibrary.collectAsStateWithLifecycle()
+    val sourceConfigs by SourceRegistry.configs.collectAsStateWithLifecycle()
+    // Changes when the server the primary-library screens read from changes:
+    // a different first server, one switched off, one edited. The refresh
+    // effects key on this rather than on the mode alone.
+    val serverKey = remember(sourceConfigs) {
+        sourceConfigs
+            .filter { it.kind == SourceKind.SUBSONIC && it.enabled && it.isComplete }
+            .joinToString { "${it.id}@${it.baseUrl}" }
+    }
 
     // Settings has no tab of its own — it sits on top of whatever tab was
     // selected. A pushed album/artist page (from the player, search, etc.)
@@ -1416,6 +1429,17 @@ private fun BitChordApp(
             target.songs.isNotEmpty() -> stamp(target.songs)
             target.browseId == null ->
                 Toast.makeText(context, context.getString(R.string.no_tracks_here), Toast.LENGTH_SHORT).show()
+            // A page on a configured server is fetched from that server, not
+            // from YouTube — see [MainViewModel.serverBrowseSongs].
+            SourceRegistry.parseBrowseKey(target.browseId.orEmpty()) != null -> scope.launch {
+                val songs = runCatching { viewModel.serverBrowseSongs(target.browseId.orEmpty()) }
+                    .getOrDefault(emptyList())
+                if (songs.isEmpty()) {
+                    Toast.makeText(context, context.getString(R.string.no_tracks_here), Toast.LENGTH_SHORT).show()
+                } else {
+                    stamp(songs)
+                }
+            }
             else -> viewModel.collectSongs(target.browseId, target.thumbnailUrl) { result ->
                 result.fold(
                     onSuccess = stamp,
@@ -2431,7 +2455,83 @@ private fun BitChordApp(
                             contentPadding = listPadding,
                         )
                     } else when (key.removePrefix(TAB_KEY).toIntOrNull() ?: selectedTab) {
-                        TAB_HOME -> HomeScreen(
+                        TAB_HOME -> if (primaryLibrary == PrimaryLibrary.SERVER) {
+                            // The server is the primary library: this tab is its
+                            // home — the same page its own card opens, rendered
+                            // here rather than pushed, because a tab is not a
+                            // page you travel to. Refreshed on each visit and
+                            // whenever the server itself changes.
+                            LaunchedEffect(serverKey) { viewModel.refreshServerHome() }
+                            val home = serverHome
+                            if (home == null) {
+                                ServerHomeEmpty(
+                                    contentPadding = listPadding,
+                                    onAddServer = {
+                                        showSources = true
+                                        editingSource = SourceConfig(kind = SourceKind.SUBSONIC)
+                                    },
+                                )
+                            } else {
+                                DetailScreen(
+                                    page = home,
+                                    currentSong = player.song,
+                                    isPlaying = player.isPlaying,
+                                    listState = homeListState,
+                                    onSongClick = { songs, index ->
+                                        playFrom(
+                                            songs,
+                                            index,
+                                            QueueSource(home.title, PlaybackSourceType.BROWSE, home.browseId),
+                                        )
+                                    },
+                                    onSongLongPress = { openSongMenu(it) },
+                                    onSongSwipe = onSongSwipe,
+                                    onShuffle = { songs ->
+                                        QueueShuffle.enableForNextQueue()
+                                        playFrom(
+                                            songs,
+                                            songs.indices.random(),
+                                            QueueSource(home.title, PlaybackSourceType.BROWSE, home.browseId),
+                                        )
+                                    },
+                                    onSectionItemClick = { item ->
+                                        item.browseId?.let { id ->
+                                            viewModel.openDetail(
+                                                browseId = id,
+                                                title = item.title,
+                                                subtitle = item.subtitle,
+                                                thumbnailUrl = item.thumbnailUrl,
+                                                type = BrowseType.ALBUM,
+                                            )
+                                        }
+                                    },
+                                    onSectionItemLongPress = onBrowseLongPress,
+                                    onMore = { songs ->
+                                        browseActions = BrowseTarget(
+                                            browseId = home.browseId,
+                                            title = home.title,
+                                            subtitle = home.subtitle,
+                                            thumbnailUrl = home.thumbnailUrl,
+                                            type = home.type,
+                                            songs = songs,
+                                            fromCard = false,
+                                        )
+                                    },
+                                    onArtistClick = { id, name ->
+                                        viewModel.openDetail(
+                                            id,
+                                            name,
+                                            context.getString(R.string.artist),
+                                            null,
+                                            BrowseType.ARTIST,
+                                        )
+                                    },
+                                    onAddSuggested = { },
+                                    contentPadding = listPadding,
+                                )
+                            }
+                        } else {
+                            HomeScreen(
                             state = homeState,
                             listState = homeListState,
                             title = stringResource(R.string.listen_now),
@@ -2461,7 +2561,8 @@ private fun BitChordApp(
                             onLoadMore = viewModel::loadMoreHome,
                             loadingMore = homeLoadingMore,
                             recentlyPlayedLoading = homeRecentlyPlayedLoading,
-                        )
+                            )
+                        }
                         TAB_EXPLORE -> selectedMoodGenre?.let { category ->
                             MoodGenrePlaylistsScreen(
                                 title = category.title,
@@ -2573,7 +2674,31 @@ private fun BitChordApp(
                             onTypeaheadLongPress = openSongMenu,
                             contentPadding = listPadding,
                         )
-                        else -> LibraryScreen(
+                        else -> if (primaryLibrary == PrimaryLibrary.SERVER) {
+                            // The server library, in the shape the YouTube one
+                            // has: shelves of the listener's own playlists,
+                            // albums, artists and starred items.
+                            LaunchedEffect(serverKey) { viewModel.refreshServerLibrary() }
+                            ServerLibraryScreen(
+                                state = serverLibrary,
+                                listState = libraryListState,
+                                onItemClick = { item ->
+                                    item.browseId?.let { id ->
+                                        viewModel.openDetail(
+                                            browseId = id,
+                                            title = item.title,
+                                            subtitle = item.subtitle,
+                                            thumbnailUrl = item.thumbnailUrl,
+                                        )
+                                    }
+                                },
+                                onItemLongPress = onBrowseLongPress,
+                                onShowAll = { shelf -> libraryShowAll = shelf },
+                                onRetry = viewModel::refreshServerLibrary,
+                                contentPadding = listPadding,
+                            )
+                        } else {
+                            LibraryScreen(
                             signedIn = signedIn,
                             state = libraryState,
                             listState = libraryListState,
@@ -2594,7 +2719,8 @@ private fun BitChordApp(
                             pullState = libraryPull,
                             contentPadding = listPadding,
                             downloadedPlaylists = downloadedPlaylists,
-                        )
+                            )
+                        }
                     }
                 }
 
@@ -3861,8 +3987,7 @@ private fun PrimaryLibraryOption(
     title: String,
     detail: String,
     onClick: () -> Unit,
-) {
-    Row(
+) {    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
@@ -3888,6 +4013,32 @@ private fun PrimaryLibraryOption(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * The Home tab in server mode before a server exists.
+ *
+ * Not an error state: nothing has gone wrong, the choice has simply not been
+ * finished yet. The button is the way to finish it — the same editor the
+ * chooser opens, reached again without going through Settings.
+ */
+@Composable
+private fun ServerHomeEmpty(
+    contentPadding: PaddingValues,
+    onAddServer: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(contentPadding),
+        contentAlignment = Alignment.Center,
+    ) {
+        MessageState(
+            message = stringResource(R.string.server_home_empty_detail),
+            actionLabel = stringResource(R.string.add_server),
+            onAction = onAddServer,
+        )
     }
 }
 

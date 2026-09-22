@@ -330,6 +330,20 @@ data class LibraryPage(
         get() = likedSongs.isEmpty() && librarySongs.isEmpty() && shelves.isEmpty()
 }
 
+/**
+ * The server-library tab, as shelves of the listener's own library.
+ *
+ * The counterpart to [LibraryPage] for a Subsonic server: artists, albums,
+ * playlists and starred items rather than liked songs and saved collections.
+ * Built as shelves rather than typed lists so the tab renders with the same
+ * row of cards the YouTube library uses — see `LibraryGridShelf`.
+ */
+data class ServerLibraryPage(
+    val shelves: List<HomeShelf> = emptyList(),
+) {
+    val isEmpty: Boolean get() = shelves.isEmpty()
+}
+
 /** A browsed album / artist / playlist page. */
 data class DetailPage(
     val browseId: String,

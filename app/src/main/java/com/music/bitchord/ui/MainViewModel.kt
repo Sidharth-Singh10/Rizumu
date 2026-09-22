@@ -38,6 +38,7 @@ import com.music.bitchord.data.model.MoodGenreSection
 import com.music.bitchord.data.model.PlaylistPrivacy
 import com.music.bitchord.data.model.SearchFilter
 import com.music.bitchord.data.model.SearchResult
+import com.music.bitchord.data.model.ServerLibraryPage
 import com.music.bitchord.data.model.ShelfItem
 import com.music.bitchord.data.model.Song
 import com.music.bitchord.data.model.SongMenu
@@ -73,6 +74,8 @@ import com.music.bitchord.data.sources.ServerBrowseKind
 import com.music.bitchord.data.sources.ServerBrowseRef
 import com.music.bitchord.data.sources.ServerLibrary
 import com.music.bitchord.data.sources.ServerPlaylist
+import com.music.bitchord.data.sources.ServerStarred
+import com.music.bitchord.data.sources.SourceConfig
 import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.data.sources.SourceRegistry
 import com.music.bitchord.data.sources.SourceResolver
@@ -1899,6 +1902,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** How many of a server's playlists its home page shows. */
         const val SERVER_PLAYLIST_ROW = 20
 
+        /** How many albums the server-library tab asks for at once. */
+        const val SERVER_LIBRARY_ALBUMS = 100
+
         /**
          * What a page with an empty listing says.
          *
@@ -2351,6 +2357,144 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return
         val songs = runCatching { library.playlist(playlistId) }.getOrNull() ?: return
         updateServerPage(browseId) { it.copy(songs = songs.ifEmptyError()) }
+    }
+
+    // ── Primary-library screens ──────────────────────────────────────────
+
+    /**
+     * The server the primary-library screens read from, if one is configured.
+     *
+     * The first enabled server in the stored order — which is the order the
+     * sources screen shows, so "first" is the user's own arrangement rather
+     * than a choice this makes for them.
+     */
+    private fun primaryServer(): SourceConfig? =
+        SourceRegistry.configs.value.firstOrNull {
+            it.kind == SourceKind.SUBSONIC && it.enabled && it.isComplete
+        }
+
+    /**
+     * The Home tab's page when the server is the primary library, or null when
+     * no server is configured.
+     *
+     * The same content the server's own page carries — random tracks, newest
+     * releases, playlists, artists, starred — loaded here rather than pushed
+     * onto the detail stack, because a tab is not a page you travel to.
+     */
+    private val _serverHome = MutableStateFlow<DetailPage?>(null)
+    val serverHome: StateFlow<DetailPage?> = _serverHome.asStateFlow()
+
+    fun refreshServerHome() {
+        val config = primaryServer()
+        if (config == null) {
+            _serverHome.value = null
+            return
+        }
+        val browseId = SourceRegistry.browseKey(config.id, ServerBrowseKind.SERVER, "")
+        if (_serverHome.value?.browseId != browseId) {
+            _serverHome.value = DetailPage(
+                browseId = browseId,
+                title = config.displayName,
+                subtitle = "",
+                thumbnailUrl = null,
+                songs = UiState.Loading,
+            )
+        }
+        viewModelScope.launch {
+            val library = SourceRegistry.instance(config.id) as? ServerLibrary
+            if (library == null) {
+                updateServerHome(browseId) { it.copy(songs = UiState.Error(text(R.string.server_page_failed))) }
+                return@launch
+            }
+            val loaded = try {
+                loadServerPage(library, ServerBrowseRef(config.id, ServerBrowseKind.SERVER, ""))
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                TrackLog.w("BitChord", "server home failed: ${failure.message}")
+                updateServerHome(browseId) {
+                    it.copy(songs = UiState.Error(failure.message ?: text(R.string.server_page_failed)))
+                }
+                return@launch
+            }
+            // Update by id — the mode may have been switched, or the server
+            // changed, while this was in flight.
+            _serverHome.value = DetailPage(
+                browseId = browseId,
+                title = config.displayName,
+                subtitle = loaded.subtitle ?: "",
+                thumbnailUrl = loaded.artwork,
+                songs = loaded.songs,
+                sections = loaded.sections,
+                description = loaded.description,
+            )
+        }
+    }
+
+    private fun updateServerHome(browseId: String, transform: (DetailPage) -> DetailPage) {
+        _serverHome.value = _serverHome.value
+            ?.takeIf { it.browseId == browseId }
+            ?.let(transform)
+    }
+
+    /** Everything the server-library tab shows, loaded together. */
+    private val _serverLibrary = MutableStateFlow<UiState<ServerLibraryPage>>(UiState.Loading)
+    val serverLibrary: StateFlow<UiState<ServerLibraryPage>> = _serverLibrary.asStateFlow()
+
+    fun refreshServerLibrary() {
+        val config = primaryServer()
+        if (config == null) {
+            _serverLibrary.value = UiState.Error(text(R.string.server_home_empty))
+            return
+        }
+        _serverLibrary.value = UiState.Loading
+        viewModelScope.launch {
+            val library = SourceRegistry.instance(config.id) as? ServerLibrary
+            if (library == null) {
+                _serverLibrary.value = UiState.Error(text(R.string.server_page_failed))
+                return@launch
+            }
+            try {
+                val artists = library.artists()
+                val albums = library.albums(
+                    ServerAlbumListType.ALPHABETICAL_BY_NAME,
+                    0,
+                    SERVER_LIBRARY_ALBUMS,
+                )
+                val playlists = library.playlists()
+                val starred = runCatching { library.starred() }.getOrDefault(ServerStarred())
+                val starredItems = starred.albums.map { it.toShelfItem(config.id) } +
+                    starred.artists.map { it.toShelfItem(config.id) }
+                val shelves = listOfNotNull(
+                    playlists.takeIf { it.isNotEmpty() }
+                        ?.let { list -> HomeShelf(text(R.string.playlists), list.map { it.toShelfItem(config.id) }) },
+                    albums.takeIf { it.isNotEmpty() }
+                        ?.let { list -> HomeShelf(text(R.string.albums), list.map { it.toShelfItem(config.id) }) },
+                    artists.takeIf { it.isNotEmpty() }
+                        ?.let { list -> HomeShelf(text(R.string.artists), list.map { it.toShelfItem(config.id) }) },
+                    starredItems.takeIf { it.isNotEmpty() }
+                        ?.let { items -> HomeShelf(text(R.string.server_starred), items) },
+                )
+                _serverLibrary.value = UiState.Success(ServerLibraryPage(shelves))
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                TrackLog.w("BitChord", "server library failed: ${failure.message}")
+                _serverLibrary.value = UiState.Error(failure.message ?: text(R.string.server_page_failed))
+            }
+        }
+    }
+
+    /** The tracks behind a server browse id, for the queue and download actions. */
+    suspend fun serverBrowseSongs(browseId: String): List<Song> {
+        val ref = SourceRegistry.parseBrowseKey(browseId) ?: return emptyList()
+        val library = SourceRegistry.instance(ref.configId) as? ServerLibrary ?: return emptyList()
+        return when (ref.kind) {
+            ServerBrowseKind.ALBUM -> library.album(ref.id)?.songs.orEmpty()
+            ServerBrowseKind.PLAYLIST -> library.playlist(ref.id).orEmpty()
+            ServerBrowseKind.ARTIST -> library.artist(ref.id)?.topSongs.orEmpty()
+            ServerBrowseKind.SERVER -> library.randomSongs(SERVER_RANDOM_SONGS)
+        }
     }
 
     fun reloadLocalDetail(browseId: String) {

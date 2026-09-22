@@ -1020,4 +1020,10 @@
 
     <string name="not_now">Not now</string>
 
+    <string name="server_home_empty">No music server yet</string>
+
+    <string name="server_home_empty_detail">Add your Navidrome, Airsonic or other Subsonic server to browse your library here.</string>
+
+    <string name="server_library_empty">This server’s library is empty</string>
+
 </resources>

@@ -1103,4 +1103,10 @@
 
     <string name="not_now">Để sau</string>
 
+    <string name="server_home_empty">Chưa có máy chủ nhạc</string>
+
+    <string name="server_home_empty_detail">Thêm Navidrome, Airsonic hoặc máy chủ Subsonic khác để duyệt thư viện của bạn tại đây.</string>
+
+    <string name="server_library_empty">Thư viện của máy chủ này trống</string>
+
 </resources>
