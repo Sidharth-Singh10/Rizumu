@@ -3,7 +3,7 @@
 <br/>
 <br/>
 
-<img src="Logo.png" alt="BitChord app icon" width="200" />
+<img src="Logo.png" alt="Rizumu app icon" width="200" />
 
 # BitChord
 
@@ -33,7 +33,7 @@
 
 <div align="center">
 
-<img src="Banner.png" alt="BitChord banner" width="100%" />
+<img src="Banner.png" alt="Rizumu banner" width="100%" />
 
 <h1><a id="features"></a>Features</h1>
 
