@@ -2290,6 +2290,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return@launch
             val songId = song?.let { SourceRegistry.parseTrackKey(it.videoId)?.second }
             runCatching { library.createPlaylist(name, listOfNotNull(songId)) }
+                .onSuccess { invalidateServerPages() }
                 .onFailure { TrackLog.w("Rizumu", "server playlist create failed: ${it.message}") }
         }
     }
@@ -2321,6 +2322,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val library = SourceRegistry.instance(ref.configId) as? ServerLibrary ?: return@launch
             runCatching { library.updatePlaylist(ref.id, name = name) }
+                .onSuccess { invalidateServerPages() }
                 .onFailure { TrackLog.w("Rizumu", "server playlist rename failed: ${it.message}") }
             val browseId = SourceRegistry.browseKey(ref.configId, ServerBrowseKind.PLAYLIST, ref.id)
             updateServerPage(browseId) { it.copy(title = name) }
@@ -2338,6 +2340,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val library = SourceRegistry.instance(ref.configId) as? ServerLibrary ?: return@launch
             runCatching { library.deletePlaylist(ref.id) }
+                .onSuccess { invalidateServerPages() }
                 .onFailure { TrackLog.w("Rizumu", "server playlist delete failed: ${it.message}") }
             val browseId = SourceRegistry.browseKey(ref.configId, ServerBrowseKind.PLAYLIST, ref.id)
             _detailStack.value = _detailStack.value.filterNot { it.browseId == browseId }
@@ -2384,14 +2387,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _serverHome = MutableStateFlow<DetailPage?>(null)
     val serverHome: StateFlow<DetailPage?> = _serverHome.asStateFlow()
 
-    fun refreshServerHome() {
+    /** The server the loaded home page describes, and whether a load is in flight. */
+    private var serverHomeKey: String? = null
+    private var serverHomeLoading = false
+
+    /**
+     * Called when the Home tab becomes current.
+     *
+     * Loads the page only when it is not already loaded for the server in hand.
+     * Switching tabs is not a reason to re-roll the random selection or spend
+     * the requests, so a return visit is a no-op; a server edit changes the key
+     * and does reload.
+     */
+    fun onServerHomeShown() {
         val config = primaryServer()
         if (config == null) {
             _serverHome.value = null
+            serverHomeKey = null
             return
         }
+        val key = serverKey(config)
+        if (serverHomeLoading) return
+        if (serverHomeKey == key && _serverHome.value?.songs is UiState.Success) return
+        loadServerHome(config, key)
+    }
+
+    private fun loadServerHome(config: SourceConfig, key: String) {
         val browseId = SourceRegistry.browseKey(config.id, ServerBrowseKind.SERVER, "")
-        if (_serverHome.value?.browseId != browseId) {
+        // The page stays on screen when the same server is being refreshed —
+        // including after a playlist write invalidated it, which is why the
+        // check is "no content yet, or a different server", not "not this key".
+        val previousKey = serverHomeKey
+        if (_serverHome.value?.songs !is UiState.Success || (previousKey != null && previousKey != key)) {
             _serverHome.value = DetailPage(
                 browseId = browseId,
                 title = config.displayName,
@@ -2400,14 +2427,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 songs = UiState.Loading,
             )
         }
+        serverHomeLoading = true
         viewModelScope.launch {
-            val library = SourceRegistry.instance(config.id) as? ServerLibrary
-            if (library == null) {
-                updateServerHome(browseId) { it.copy(songs = UiState.Error(text(R.string.server_page_failed))) }
-                return@launch
-            }
-            val loaded = try {
-                loadServerPage(library, ServerBrowseRef(config.id, ServerBrowseKind.SERVER, ""))
+            try {
+                val library = SourceRegistry.instance(config.id) as? ServerLibrary
+                if (library == null) {
+                    updateServerHome(browseId) { it.copy(songs = UiState.Error(text(R.string.server_page_failed))) }
+                    return@launch
+                }
+                val loaded = loadServerPage(library, ServerBrowseRef(config.id, ServerBrowseKind.SERVER, ""))
+                // Update by id — the mode may have been switched, or the server
+                // changed, while this was in flight.
+                _serverHome.value = DetailPage(
+                    browseId = browseId,
+                    title = config.displayName,
+                    subtitle = loaded.subtitle ?: "",
+                    thumbnailUrl = loaded.artwork,
+                    songs = loaded.songs,
+                    sections = loaded.sections,
+                    description = loaded.description,
+                )
+                serverHomeKey = key
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -2415,21 +2455,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 updateServerHome(browseId) {
                     it.copy(songs = UiState.Error(failure.message ?: text(R.string.server_page_failed)))
                 }
-                return@launch
+            } finally {
+                serverHomeLoading = false
             }
-            // Update by id — the mode may have been switched, or the server
-            // changed, while this was in flight.
-            _serverHome.value = DetailPage(
-                browseId = browseId,
-                title = config.displayName,
-                subtitle = loaded.subtitle ?: "",
-                thumbnailUrl = loaded.artwork,
-                songs = loaded.songs,
-                sections = loaded.sections,
-                description = loaded.description,
-            )
         }
     }
+
+    /** The identity of a configured server, for telling "same" from "changed". */
+    private fun serverKey(config: SourceConfig): String = "${config.id}@${config.baseUrl}"
 
     private fun updateServerHome(browseId: String, transform: (DetailPage) -> DetailPage) {
         _serverHome.value = _serverHome.value
@@ -2441,20 +2474,68 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _serverLibrary = MutableStateFlow<UiState<ServerLibraryPage>>(UiState.Loading)
     val serverLibrary: StateFlow<UiState<ServerLibraryPage>> = _serverLibrary.asStateFlow()
 
+    /**
+     * Whether a pull-to-refresh is in flight.
+     *
+     * Separate from [serverLibrary]'s own state on purpose: a background
+     * refresh keeps the shelves on screen, so the screen needs this to know
+     * that a pull is being answered.
+     */
+    private val _serverLibraryRefreshing = MutableStateFlow(false)
+    val serverLibraryRefreshing: StateFlow<Boolean> = _serverLibraryRefreshing.asStateFlow()
+
+    private var serverLibraryKey: String? = null
+    private var serverLibraryLoading = false
+
+    /**
+     * Called when the Library tab becomes current.
+     *
+     * Cheap and idempotent: a visit that finds the shelves already loaded for
+     * this server does nothing, so switching tabs costs no requests and shows
+     * no spinner. A server edit changes the key and a playlist write clears
+     * it, either of which brings the next visit back here to reload.
+     */
+    fun onServerLibraryShown() {
+        val config = primaryServer()
+        if (config == null) {
+            _serverLibrary.value = UiState.Error(text(R.string.server_home_empty))
+            serverLibraryKey = null
+            return
+        }
+        val key = serverKey(config)
+        if (serverLibraryLoading) return
+        if (serverLibraryKey == key && _serverLibrary.value is UiState.Success) return
+        loadServerLibrary(config, key, showIndicator = false)
+    }
+
+    /** Forces a reload — the pull-to-refresh, and the error state's retry. */
     fun refreshServerLibrary() {
         val config = primaryServer()
         if (config == null) {
             _serverLibrary.value = UiState.Error(text(R.string.server_home_empty))
             return
         }
-        _serverLibrary.value = UiState.Loading
+        if (serverLibraryLoading) return
+        loadServerLibrary(config, serverKey(config), showIndicator = true)
+    }
+
+    private fun loadServerLibrary(config: SourceConfig, key: String, showIndicator: Boolean) {
+        // Kept on screen when the same server is being refreshed — including
+        // after a playlist write invalidated it. The loading state is for a
+        // first load, or for a genuinely different server's shelves.
+        val previousKey = serverLibraryKey
+        if (_serverLibrary.value !is UiState.Success || (previousKey != null && previousKey != key)) {
+            _serverLibrary.value = UiState.Loading
+        }
+        serverLibraryLoading = true
+        if (showIndicator) _serverLibraryRefreshing.value = true
         viewModelScope.launch {
-            val library = SourceRegistry.instance(config.id) as? ServerLibrary
-            if (library == null) {
-                _serverLibrary.value = UiState.Error(text(R.string.server_page_failed))
-                return@launch
-            }
             try {
+                val library = SourceRegistry.instance(config.id) as? ServerLibrary
+                if (library == null) {
+                    _serverLibrary.value = UiState.Error(text(R.string.server_page_failed))
+                    return@launch
+                }
                 val artists = library.artists()
                 val albums = library.albums(
                     ServerAlbumListType.ALPHABETICAL_BY_NAME,
@@ -2476,13 +2557,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         ?.let { items -> HomeShelf(text(R.string.server_starred), items) },
                 )
                 _serverLibrary.value = UiState.Success(ServerLibraryPage(shelves))
+                serverLibraryKey = key
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 TrackLog.w("Rizumu", "server library failed: ${failure.message}")
                 _serverLibrary.value = UiState.Error(failure.message ?: text(R.string.server_page_failed))
+            } finally {
+                serverLibraryLoading = false
+                if (showIndicator) _serverLibraryRefreshing.value = false
             }
         }
+    }
+
+    /**
+     * Marks the server pages stale after a write that changes what they list.
+     *
+     * Nothing is fetched here: the user may not be looking at either page, and
+     * the next visit reloads through [onServerLibraryShown] /
+     * [onServerHomeShown]. The same convention the YouTube library uses for a
+     * playlist edited elsewhere — see [onLibraryShown].
+     */
+    private fun invalidateServerPages() {
+        serverLibraryKey = null
+        serverHomeKey = null
     }
 
     /** The tracks behind a server browse id, for the queue and download actions. */

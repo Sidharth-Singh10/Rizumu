@@ -9,6 +9,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,6 +22,7 @@ import com.music.rizumu.data.model.ServerLibraryPage
 import com.music.rizumu.data.model.ShelfItem
 import com.music.rizumu.data.model.UiState
 import com.music.rizumu.ui.components.MessageState
+import com.music.rizumu.ui.components.PullToRefresh
 
 /**
  * The Library tab when the server is the primary library.
@@ -36,6 +39,7 @@ import com.music.rizumu.ui.components.MessageState
  * whose queue and download actions load their tracks from the server rather
  * than from YouTube.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ServerLibraryScreen(
     state: UiState<ServerLibraryPage>,
@@ -43,44 +47,51 @@ fun ServerLibraryScreen(
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: (ShelfItem) -> Unit,
     onShowAll: (HomeShelf) -> Unit,
-    onRetry: () -> Unit,
+    /** A pull-to-refresh in flight — see `serverLibraryRefreshing`. */
+    refreshing: Boolean,
+    pullState: PullToRefreshState,
+    /** Reloads the shelves; also the error state's retry. */
+    onRefresh: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
-    when (state) {
-        is UiState.Loading -> Box(
-            modifier = modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator(strokeWidth = 2.5.dp, modifier = Modifier.size(28.dp))
-        }
-
-        is UiState.Error -> MessageState(
-            message = state.message,
-            actionLabel = stringResource(R.string.retry),
-            onAction = onRetry,
-            modifier = modifier,
-        )
-
-        is UiState.Success -> if (state.data.isEmpty) {
-            MessageState(
-                message = stringResource(R.string.server_library_empty),
-                modifier = modifier,
-            )
-        } else {
-            LazyColumn(
-                state = listState,
-                contentPadding = contentPadding,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = modifier,
+    PullToRefresh(
+        refreshing = refreshing,
+        onRefresh = onRefresh,
+        state = pullState,
+        modifier = modifier,
+    ) {
+        when (state) {
+            is UiState.Loading -> Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
             ) {
-                items(state.data.shelves, key = { it.title }) { shelf ->
-                    LibraryGridShelf(
-                        shelf = shelf,
-                        onItemClick = onItemClick,
-                        onItemLongPress = onItemLongPress,
-                        onShowAll = { onShowAll(shelf) },
-                    )
+                CircularProgressIndicator(strokeWidth = 2.5.dp, modifier = Modifier.size(28.dp))
+            }
+
+            is UiState.Error -> MessageState(
+                message = state.message,
+                actionLabel = stringResource(R.string.retry),
+                onAction = onRefresh,
+            )
+
+            is UiState.Success -> if (state.data.isEmpty) {
+                MessageState(message = stringResource(R.string.server_library_empty))
+            } else {
+                LazyColumn(
+                    state = listState,
+                    contentPadding = contentPadding,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    items(state.data.shelves, key = { it.title }) { shelf ->
+                        LibraryGridShelf(
+                            shelf = shelf,
+                            onItemClick = onItemClick,
+                            onItemLongPress = onItemLongPress,
+                            onShowAll = { onShowAll(shelf) },
+                        )
+                    }
                 }
             }
         }

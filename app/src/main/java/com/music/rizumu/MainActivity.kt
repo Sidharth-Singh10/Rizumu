@@ -683,6 +683,7 @@ private fun RizumuApp(
     val primaryLibrary by AppSettings.primaryLibrary.collectAsStateWithLifecycle()
     val serverHome by viewModel.serverHome.collectAsStateWithLifecycle()
     val serverLibrary by viewModel.serverLibrary.collectAsStateWithLifecycle()
+    val serverLibraryRefreshing by viewModel.serverLibraryRefreshing.collectAsStateWithLifecycle()
     val sourceConfigs by SourceRegistry.configs.collectAsStateWithLifecycle()
     // Changes when the server the primary-library screens read from changes:
     // a different first server, one switched off, one edited. The refresh
@@ -825,6 +826,7 @@ private fun RizumuApp(
     val homePull = rememberPullToRefreshState()
     val explorePull = rememberPullToRefreshState()
     val libraryPull = rememberPullToRefreshState()
+    val serverLibraryPull = rememberPullToRefreshState()
     val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
     val currentFeed = when {
         showSettings || showAccountScrobbling || detail != null -> null
@@ -835,11 +837,18 @@ private fun RizumuApp(
     }
     // The lead shelf is listening history, so opening Home after playing
     // something is exactly when it needs re-fetching.
-    LaunchedEffect(currentFeed) {
-        if (currentFeed == MainViewModel.Feed.HOME) viewModel.onHomeShown()
-        // Likewise for Library: a playlist created or a song liked since it
-        // was last fetched is a change to exactly this page.
-        if (currentFeed == MainViewModel.Feed.LIBRARY) viewModel.onLibraryShown()
+    LaunchedEffect(currentFeed, serverMode, serverKey) {
+        // In server mode these two tabs are the listener's own library, so the
+        // YouTube feeds are not asked for at all.
+        if (serverMode) {
+            if (currentFeed == MainViewModel.Feed.HOME) viewModel.onServerHomeShown()
+            if (currentFeed == MainViewModel.Feed.LIBRARY) viewModel.onServerLibraryShown()
+        } else {
+            if (currentFeed == MainViewModel.Feed.HOME) viewModel.onHomeShown()
+            // Likewise for Library: a playlist created or a song liked since it
+            // was last fetched is a change to exactly this page.
+            if (currentFeed == MainViewModel.Feed.LIBRARY) viewModel.onLibraryShown()
+        }
     }
 
     val currentPull = when (currentFeed) {
@@ -2480,9 +2489,8 @@ private fun RizumuApp(
                             // The server is the primary library: this tab is its
                             // home — the same page its own card opens, rendered
                             // here rather than pushed, because a tab is not a
-                            // page you travel to. Refreshed on each visit and
-                            // whenever the server itself changes.
-                            LaunchedEffect(serverKey) { viewModel.refreshServerHome() }
+                            // page you travel to. Loaded by the feed effect when
+                            // this tab becomes current.
                             val home = serverHome
                             if (home == null) {
                                 ServerHomeEmpty(
@@ -2698,8 +2706,8 @@ private fun RizumuApp(
                         else -> if (primaryLibrary == PrimaryLibrary.SERVER) {
                             // The server library, in the shape the YouTube one
                             // has: shelves of the listener's own playlists,
-                            // albums, artists and starred items.
-                            LaunchedEffect(serverKey) { viewModel.refreshServerLibrary() }
+                            // albums, artists and starred items. Loaded by the
+                            // feed effect when this tab becomes current.
                             ServerLibraryScreen(
                                 state = serverLibrary,
                                 listState = libraryListState,
@@ -2715,7 +2723,9 @@ private fun RizumuApp(
                                 },
                                 onItemLongPress = onBrowseLongPress,
                                 onShowAll = { shelf -> libraryShowAll = shelf },
-                                onRetry = viewModel::refreshServerLibrary,
+                                refreshing = serverLibraryRefreshing,
+                                pullState = serverLibraryPull,
+                                onRefresh = viewModel::refreshServerLibrary,
                                 contentPadding = listPadding,
                             )
                         } else {
