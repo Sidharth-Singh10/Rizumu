@@ -138,6 +138,7 @@ import com.music.bitchord.R
 import com.music.bitchord.data.sources.DeviceCodecs
 import com.music.bitchord.data.settings.AudioQuality
 import com.music.bitchord.data.settings.DownloadQuality
+import com.music.bitchord.data.settings.PrimaryLibrary
 import com.music.bitchord.data.settings.ThemeMode
 import com.music.bitchord.data.stats.Backup
 import com.music.bitchord.playback.AudioCache
@@ -168,6 +169,11 @@ fun SettingsScreen(
     onLyricsSources: () -> Unit,
     onTranslationLanguage: () -> Unit,
     onSources: () -> Unit,
+    /**
+     * Reopens the first-run chooser so the library the app is built around can
+     * be changed without reinstalling.
+     */
+    onPrimaryLibrary: () -> Unit,
     onListenTogether: () -> Unit,
     onSpotifyCanvasAuth: () -> Unit,
     onAppLanguage: () -> Unit,
@@ -216,6 +222,7 @@ fun SettingsScreen(
     val swipeToPlayNext by AppSettings.swipeToPlayNext.collectAsStateWithLifecycle()
     val dontRepeatSuggestions by AppSettings.dontRepeatSuggestions.collectAsStateWithLifecycle()
     val preferMusicOnly by AppSettings.preferMusicOnly.collectAsStateWithLifecycle()
+    val primaryLibrary by AppSettings.primaryLibrary.collectAsStateWithLifecycle()
     val filterNonMusicAudio by AppSettings.filterNonMusicAudio.collectAsStateWithLifecycle()
     val localMusicFolderUri by AppSettings.localMusicFolderUri.collectAsStateWithLifecycle()
     val highPerformanceMode by AppSettings.highPerformanceMode.collectAsStateWithLifecycle()
@@ -402,6 +409,17 @@ fun SettingsScreen(
         // longer a setting at all — see
         // [SourceResolver.requestForNow][com.music.bitchord.data.sources.SourceResolver.requestForNow].
         SearchableSettingsGroup(search, header = stringResource(R.string.audio_quality)) {
+            val primaryTitle = stringResource(R.string.primary_library)
+            val primarySubtitle = stringResource(R.string.primary_library_subtitle)
+            row(primaryTitle, primarySubtitle, "server", "navidrome", "subsonic", "youtube", "home") {
+                SettingsRow(
+                    icon = Icons.Rounded.LibraryMusic,
+                    title = primaryTitle,
+                    subtitle = primarySubtitle,
+                    value = (primaryLibrary ?: PrimaryLibrary.YOUTUBE).localizedLabel(),
+                    onClick = onPrimaryLibrary,
+                )
+            }
             val sourceTitle = stringResource(R.string.source)
             val sourceSubtitle = stringResource(R.string.sources_subtitle)
             row(sourceTitle, sourceSubtitle, "addon", "lossless") {
@@ -1572,6 +1590,14 @@ private fun DownloadQuality.localizedLabel(): String = stringResource(
         DownloadQuality.STANDARD -> R.string.standard
         DownloadQuality.HIGH -> R.string.high
         DownloadQuality.LOSSLESS -> R.string.lossless
+    },
+)
+
+@Composable
+private fun PrimaryLibrary.localizedLabel(): String = stringResource(
+    when (this) {
+        PrimaryLibrary.SERVER -> R.string.primary_library_server
+        PrimaryLibrary.YOUTUBE -> R.string.primary_library_youtube
     },
 )
 

@@ -62,8 +62,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Upgrade
 import androidx.compose.material3.DropdownMenu
@@ -131,6 +133,7 @@ import com.music.bitchord.data.model.durationMillis
 import com.music.bitchord.data.scrobbling.LastFM
 import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.LibrarySort
+import com.music.bitchord.data.settings.PrimaryLibrary
 import com.music.bitchord.data.settings.ThemeMode
 import com.music.bitchord.ui.components.AccountProfileSelector
 import com.music.bitchord.ui.screens.AccountAndScrobblingScreen
@@ -194,6 +197,7 @@ import com.music.bitchord.ui.components.isGlassSupported
 import com.music.bitchord.data.sources.SourceConfig
 import com.music.bitchord.data.sources.ServerBrowseKind
 import com.music.bitchord.data.sources.ServerPlaylist
+import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.data.sources.SourceRegistry
 import com.music.bitchord.ui.components.ListenBrainzTokenAlert
 import com.music.bitchord.ui.components.MiniPlayer
@@ -468,6 +472,12 @@ private fun BitChordApp(
     var replaySharePage by remember { mutableStateOf<ReplayStoryPage?>(null) }
     var showAccountScrobbling by remember { mutableStateOf(false) }
     var showSources by remember { mutableStateOf(false) }
+    // The first-run chooser, and whether it has been waved away for this
+    // session. Dismissal is deliberately not persisted: until a library is
+    // actually chosen, the question is asked again next launch, and Settings
+    // can always reopen it in between.
+    var showPrimaryLibraryChooser by remember { mutableStateOf(false) }
+    var primaryLibraryDismissed by remember { mutableStateOf(false) }
     var showListenTogether by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
     var showSpotifyCanvasAuth by remember { mutableStateOf(false) }
@@ -668,6 +678,7 @@ private fun BitChordApp(
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
     val serverPlaylists by viewModel.serverPlaylists.collectAsStateWithLifecycle()
+    val primaryLibrary by AppSettings.primaryLibrary.collectAsStateWithLifecycle()
 
     // Settings has no tab of its own — it sits on top of whatever tab was
     // selected. A pushed album/artist page (from the player, search, etc.)
@@ -2239,6 +2250,7 @@ private fun BitChordApp(
                             onLyricsSources = { showLyricsSources = true },
                             onTranslationLanguage = { showTranslationLanguage = true },
                             onSources = { showSources = true },
+                            onPrimaryLibrary = { showPrimaryLibraryChooser = true },
                             onListenTogether = { showListenTogether = true },
                             onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
                             onAppLanguage = { showAppLanguage = true },
@@ -3758,6 +3770,124 @@ private fun BitChordApp(
             )
         }
 
+        // The first-run question. Asked until answered — a dismissal only
+        // silences it for this session — and reopenable from Settings.
+        if (showPrimaryLibraryChooser || (primaryLibrary == null && !primaryLibraryDismissed)) {
+            PrimaryLibraryChooser(
+                onChoose = { choice ->
+                    AppSettings.setPrimaryLibrary(choice)
+                    showPrimaryLibraryChooser = false
+                    primaryLibraryDismissed = true
+                    val hasServer = SourceRegistry.configs.value
+                        .any { it.kind == SourceKind.SUBSONIC && it.isComplete }
+                    if (choice == PrimaryLibrary.SERVER && !hasServer) {
+                        // The choice is a promise the app cannot keep without a
+                        // server, so the editor opens ready to take one.
+                        showSources = true
+                        editingSource = SourceConfig(kind = SourceKind.SUBSONIC)
+                    }
+                },
+                onDismiss = {
+                    showPrimaryLibraryChooser = false
+                    primaryLibraryDismissed = true
+                },
+            )
+        }
+
+    }
+}
+
+/**
+ * The first-run choice: which library the app is built around.
+ *
+ * A sheet rather than a dialog because both answers need a sentence of
+ * explanation — one is "your own server, no account", the other is "the full
+ * catalogue, sign-in optional" — and two rows with room to say that read
+ * better than two buttons. Dismissible: someone who has not decided yet can
+ * keep using the app as YouTube and answer later from Settings.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PrimaryLibraryChooser(
+    onChoose: (PrimaryLibrary) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.background,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 20.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.primary_library_choose),
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 4.dp),
+            )
+            Text(
+                text = stringResource(R.string.primary_library_choose_detail),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 14.dp),
+            )
+            PrimaryLibraryOption(
+                icon = Icons.Rounded.Dns,
+                title = stringResource(R.string.primary_library_server),
+                detail = stringResource(R.string.primary_library_server_detail),
+                onClick = { onChoose(PrimaryLibrary.SERVER) },
+            )
+            PrimaryLibraryOption(
+                icon = Icons.Rounded.PlayCircle,
+                title = stringResource(R.string.primary_library_youtube),
+                detail = stringResource(R.string.primary_library_youtube_detail),
+                onClick = { onChoose(PrimaryLibrary.YOUTUBE) },
+            )
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            ) {
+                Text(stringResource(R.string.not_now))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrimaryLibraryOption(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    detail: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 22.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(28.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

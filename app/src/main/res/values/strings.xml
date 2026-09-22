@@ -1002,4 +1002,22 @@
 
     <string name="server_new_playlist_description">Creates a playlist on this server.</string>
 
+    <string name="primary_library">Primary library</string>
+
+    <string name="primary_library_subtitle">Which library the app is built around</string>
+
+    <string name="primary_library_server">My music server</string>
+
+    <string name="primary_library_youtube">YouTube Music</string>
+
+    <string name="primary_library_choose">Choose your library</string>
+
+    <string name="primary_library_choose_detail">You can switch any time in Settings.</string>
+
+    <string name="primary_library_server_detail">Navidrome, Airsonic, Gonic and other Subsonic servers. No Google account needed.</string>
+
+    <string name="primary_library_youtube_detail">The full YouTube Music catalogue, with optional sign-in for your library.</string>
+
+    <string name="not_now">Not now</string>
+
 </resources>

@@ -131,6 +131,22 @@ enum class ThemeMode(val label: String) {
 }
 
 /**
+ * Which library the app is built around.
+ *
+ * The choice is not a source preference — both modes can still *play* from
+ * everything configured — it is about which library the screens are shaped
+ * around. [SERVER] makes the app a client for the listener's own Subsonic
+ * server (no Google account anywhere in the UI), with YouTube reduced to the
+ * fallback that covers what the server does not hold. [YOUTUBE] is the app as
+ * it was: YouTube Music first, with a configured server still available as a
+ * source.
+ */
+enum class PrimaryLibrary(val label: String) {
+    SERVER("My music server"),
+    YOUTUBE("YouTube Music"),
+}
+
+/**
  * Which of the equaliser's two tabs is driving the sound.
  *
  * One at a time rather than both at once: they are two ways of describing the
@@ -580,6 +596,25 @@ object AppSettings {
     /** How many playlists [pinnedPlaylists] can hold at once. */
     const val MAX_PINNED_PLAYLISTS = 5
 
+    // ── Primary library ──────────────────────────────────────────────────
+
+    /**
+     * Which library the app is built around, or null until the user has
+     * chosen.
+     *
+     * Null is a real state and not a default: the first run asks, and until
+     * the answer is given the app renders as YouTube — the shape it had
+     * before the choice existed — with the chooser over it. Once chosen it is
+     * only ever switched deliberately, from Settings.
+     */
+    val primaryLibrary = MutableStateFlow<PrimaryLibrary?>(null)
+
+    /** Records the choice. Null is never written — the chooser owns the unset state. */
+    fun setPrimaryLibrary(value: PrimaryLibrary) {
+        primaryLibrary.value = value
+        prefs.edit().putString(KEY_PRIMARY_LIBRARY, value.name).apply()
+    }
+
     // ── Scrobbling ──────────────────────────────────────────────────────
 
     /** One release gate shared by the settings UI and the playback service. */
@@ -818,6 +853,8 @@ object AppSettings {
         replayGenres.value = prefs.getBoolean(KEY_REPLAY_GENRES, true)
         filterNonMusicAudio.value = prefs.getBoolean(KEY_FILTER_NON_MUSIC_AUDIO, true)
         localMusicSort.value = readLocalMusicSort(KEY_LOCAL_MUSIC_SORT)
+        primaryLibrary.value = prefs.getString(KEY_PRIMARY_LIBRARY, null)
+            ?.let { stored -> PrimaryLibrary.entries.firstOrNull { it.name == stored } }
         downloadedMusicSort.value = readLocalMusicSort(KEY_DOWNLOADED_MUSIC_SORT)
         localMusicViewType.value = readLibraryViewType(KEY_LOCAL_MUSIC_VIEW_TYPE)
         downloadedMusicViewType.value = readLibraryViewType(KEY_DOWNLOADED_MUSIC_VIEW_TYPE)
@@ -1781,6 +1818,7 @@ object AppSettings {
     private const val KEY_DISCORD_BUTTON_2_TEXT = "discord_button_2_text"
     private const val KEY_DISCORD_BUTTON_2_VISIBLE = "discord_button_2_visible"
     private const val KEY_DISCORD_INFO_DISMISSED = "discord_info_dismissed"
+    private const val KEY_PRIMARY_LIBRARY = "primary_library"
     private const val KEY_LAST_VERSION_CODE = "last_version_code"
 }
 

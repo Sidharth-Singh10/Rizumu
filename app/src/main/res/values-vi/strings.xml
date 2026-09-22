@@ -1085,4 +1085,22 @@
 
     <string name="server_new_playlist_description">Tạo một danh sách phát trên máy chủ này.</string>
 
+    <string name="primary_library">Thư viện chính</string>
+
+    <string name="primary_library_subtitle">Thư viện mà ứng dụng xoay quanh</string>
+
+    <string name="primary_library_server">Máy chủ nhạc của tôi</string>
+
+    <string name="primary_library_youtube">YouTube Music</string>
+
+    <string name="primary_library_choose">Chọn thư viện của bạn</string>
+
+    <string name="primary_library_choose_detail">Bạn có thể đổi bất cứ lúc nào trong Cài đặt.</string>
+
+    <string name="primary_library_server_detail">Navidrome, Airsonic, Gonic và các máy chủ Subsonic khác. Không cần tài khoản Google.</string>
+
+    <string name="primary_library_youtube_detail">Toàn bộ kho nhạc YouTube Music, có thể đăng nhập để dùng thư viện của bạn.</string>
+
+    <string name="not_now">Để sau</string>
+
 </resources>
