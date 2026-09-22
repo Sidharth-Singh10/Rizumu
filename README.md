@@ -3,9 +3,7 @@
 <br/>
 <br/>
 
-<img src="Logo.png" alt="Rizumu app icon" width="200" />
-
-# Rizumu
+<img src="Banner.png" alt="Rizumu banner" width="100%" />
 
 ### Your music, wherever it lives.
 
@@ -15,7 +13,6 @@
 [![License](https://img.shields.io/github/license/Sidharth-Singh10/Rizumu?style=for-the-badge&labelColor=0d1117)](https://github.com/Sidharth-Singh10/Rizumu/blob/main/LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/Sidharth-Singh10/Rizumu/total?style=for-the-badge&labelColor=0d1117)](https://github.com/Sidharth-Singh10/Rizumu/releases)
 
-<br/>
 
 [**Download**](#download) · [**Features**](#features) · [**Contributing**](#contributing) · [**Support**](#support) · [**Disclaimer**](#disclaimer)
 
@@ -29,7 +26,6 @@
 
 <div align="center">
 
-<img src="Banner.png" alt="Rizumu banner" width="100%" />
 
 <h1><a id="features"></a>Features</h1>
 
@@ -98,14 +94,6 @@ We welcome contributions to Rizumu! When submitting a Pull Request, please ensur
 </div>
 
 ---
-
-<div align="center">
-
-
-
----
-
-<div align="center">
 
 <h1><a id="disclaimer"></a>Disclaimer & Legal Notice</h1>
 
