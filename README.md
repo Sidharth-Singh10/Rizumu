@@ -5,29 +5,25 @@
 
 <img src="Logo.png" alt="Rizumu app icon" width="200" />
 
-# BitChord
+# Rizumu
 
-### Aesthetic YouTube Music Client
+### Your music, wherever it lives.
 
 <br/>
 
-[![Latest release](https://img.shields.io/github/v/release/kushagrasinghx/BitChord?style=for-the-badge&labelColor=0d1117)](https://github.com/kushagrasinghx/BitChord/releases)
-[![License](https://img.shields.io/github/license/kushagrasinghx/BitChord?style=for-the-badge&labelColor=0d1117)](https://github.com/kushagrasinghx/BitChord/blob/main/LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/kushagrasinghx/BitChord/total?style=for-the-badge&labelColor=0d1117)](https://github.com/kushagrasinghx/BitChord/releases)
+[![Latest release](https://img.shields.io/github/v/release/Sidharth-Singh10/Rizumu?style=for-the-badge&labelColor=0d1117)](https://github.com/Sidharth-Singh10/Rizumu/releases)
+[![License](https://img.shields.io/github/license/Sidharth-Singh10/Rizumu?style=for-the-badge&labelColor=0d1117)](https://github.com/Sidharth-Singh10/Rizumu/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/Sidharth-Singh10/Rizumu/total?style=for-the-badge&labelColor=0d1117)](https://github.com/Sidharth-Singh10/Rizumu/releases)
 
 <br/>
 
 [**Download**](#download) · [**Features**](#features) · [**Contributing**](#contributing) · [**Support**](#support) · [**Disclaimer**](#disclaimer)
 
 <br/>
-
-<a href="https://trendshift.io/repositories/177639?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-177639" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/177639/daily?language=Kotlin" alt="kushagrasinghx%2FBitChord | Trendshift" width="250" height="55"/></a>
-<a href="https://trendshift.io/repositories/177639?utm_source=trendshift-badge&utm_medium=badge&utm_campaign=badge-trendshift-177639" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/177639/weekly?language=Kotlin" alt="kushagrasinghx%2FBitChord | Trendshift" width="250" height="55"/></a>
-
 </div>
 
 > [!IMPORTANT]
-> BitChord is not affiliated with, endorsed by, or connected to YouTube or Google in any way. Use it at your own discretion.
+> Rizumu is not affiliated with, endorsed by, or connected to YouTube or Google in any way. Use it at your own discretion.
 
 ---
 
@@ -65,7 +61,7 @@
 - **Discord Rich Presence** — in-app login, live track/artist/album and progress.
 - **Scrobbling** to Last.fm and ListenBrainz.
 - **Your own music server** — Navidrome, Airsonic, Gonic and other Subsonic-compatible servers: search, browse, playlists, scrobbling and lyrics from your own library. See [docs/SUBSONIC.md](docs/SUBSONIC.md).
-- **Choose your library** — the first run asks whether BitChord is built around YouTube Music or your own server; switch any time in Settings. Server mode keeps YouTube as a fallback for what the server doesn't hold, with no Google account in the UI.
+- **Choose your library** — the first run asks whether Rizumu is built around YouTube Music or your own server; switch any time in Settings. Server mode keeps YouTube as a fallback for what the server doesn't hold, with no Google account in the UI.
 - **Pluggable sources** — add, edit, test and health-check module sources.
 
 #### Controls & Tweaks
@@ -87,7 +83,7 @@
 
 <h1><a id="download"></a>Download</h1>
 
-Grab the latest signed APK from the [Releases](https://github.com/kushagrasinghx/BitChord/releases) page. Sideloading requires enabling "Install unknown apps" for whichever app you download it with.
+Grab the latest signed APK from the [Releases](https://github.com/Sidharth-Singh10/Rizumu/releases) page. Sideloading requires enabling "Install unknown apps" for whichever app you download it with.
 
 </div>
 
@@ -97,7 +93,7 @@ Grab the latest signed APK from the [Releases](https://github.com/kushagrasinghx
 
 <h1><a id="contributing"></a>Contributing</h1>
 
-We welcome contributions to BitChord! When submitting a Pull Request, please ensure you make your PR against the **`latest`** branch, not the `main` branch.
+We welcome contributions to Rizumu! When submitting a Pull Request, please ensure you make your PR against the **`latest`** branch, not the `main` branch.
 
 </div>
 
@@ -107,7 +103,7 @@ We welcome contributions to BitChord! When submitting a Pull Request, please ens
 
 <h1><a id="support"></a>Support</h1>
 
-BitChord is free and always will be — if it's earned a spot in your rotation, you can chip in here:
+Rizumu is free and always will be — if it's earned a spot in your rotation, you can chip in here:
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kushagrasinghx)
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/kuxhagrasingh)
@@ -124,12 +120,12 @@ BitChord is free and always will be — if it's earned a spot in your rotation, 
 
 <h1><a id="disclaimer"></a>Disclaimer & Legal Notice</h1>
 
-BitChord is an independent, community-driven third-party audio player and client. It is **not** associated with Google LLC, YouTube Music, Deezer, Telegram, or any of their parent companies.
+Rizumu is an independent, community-driven third-party audio player and client. It is **not** associated with Google LLC, YouTube Music, Deezer, Telegram, or any of their parent companies.
 
-* **No Media Hosting:** BitChord does not host, upload, or store copyrighted music files. It operates strictly as an interface to scan local device storage or stream media directly from public, public-facing, or user-authenticated APIs.
+* **No Media Hosting:** Rizumu does not host, upload, or store copyrighted music files. It operates strictly as an interface to scan local device storage or stream media directly from public, public-facing, or user-authenticated APIs.
 * **Fair Use & API Usage:** This software is created solely for personal research, educational, and fair-use purposes. The user is entirely responsible for ensuring their usage aligns with their local copyright laws and YouTube Terms of Service.
-* **No Ad-Blocking Guarantee:** While BitChord focuses on providing a clean listening environment, it does not guarantee permanent bypasses or modifications to commercial third-party platform conditions.
-* **Copyleft:** BitChord is free software under the GPLv3. The license does not let anyone forbid others from selling or redistributing copies, but any distribution must come with the Corresponding Source under the same license.
+* **No Ad-Blocking Guarantee:** While Rizumu focuses on providing a clean listening environment, it does not guarantee permanent bypasses or modifications to commercial third-party platform conditions.
+* **Copyleft:** Rizumu is free software under the GPLv3. The license does not let anyone forbid others from selling or redistributing copies, but any distribution must come with the Corresponding Source under the same license.
 
 </div>
 

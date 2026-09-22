@@ -10,7 +10,7 @@
 # disjoint set of parties. See app/party.py, PartyStore.
 services:
   - type: web
-    name: bitchord-listen-together
+    name: rizumu-listen-together
     runtime: python
     plan: free
     rootDir: backend

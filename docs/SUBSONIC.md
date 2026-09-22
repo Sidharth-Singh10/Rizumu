@@ -1,6 +1,6 @@
 # Your own music server (Subsonic / OpenSubsonic)
 
-BitChord can stream from a Subsonic-compatible server — **Navidrome**,
+Rizumu can stream from a Subsonic-compatible server — **Navidrome**,
 Airsonic, Gonic, Ampache, Jellyfin's Subsonic endpoint, and anything else that
 speaks Subsonic API 1.16.1 — and can be built around it entirely. Your files
 are streamed directly from your server; nothing is uploaded anywhere, and no
@@ -8,7 +8,7 @@ third-party service is involved.
 
 ## Using the server as the main app
 
-The first run asks which library BitChord is built around:
+The first run asks which library Rizumu is built around:
 
 - **My music server** — Home becomes your server's home (random tracks, newest
   releases, playlists, artists, starred), Library becomes shelves of your own
@@ -38,7 +38,7 @@ one.
      account token and the audio itself travel unencrypted.
    - **Username** and **password** — the same account you use with any other
      Subsonic client. A read-only account is enough unless you want to create
-     or edit playlists from BitChord.
+     or edit playlists from Rizumu.
    - **Stream quality** — see below.
 3. Tap **Test** (optional — a server that is asleep can still be saved) and
    **Save**. The row shows the server's name, version and whether it supports
@@ -48,7 +48,7 @@ one.
 Credentials are stored in the app's encrypted preferences, alongside every
 other secret. Authentication uses Subsonic's token scheme
 (`t = md5(password + salt)`), so the password itself is not sent on each
-request; if a server does not support token auth, BitChord falls back to the
+request; if a server does not support token auth, Rizumu falls back to the
 legacy password parameter automatically for that server.
 
 ## Stream quality
@@ -76,9 +76,9 @@ original file, whatever the mode.
 | Cover art | Fetched from the server |
 | Browse | Artists, albums (newest), random tracks, playlists and starred items on the server's home page; artist and album pages |
 | Playlists | Read, play, create, add to, remove from, rename and delete |
-| Play reporting | Now-playing and finished plays are sent to the server, in addition to Last.fm / ListenBrainz. No Last.fm account is needed for this: if the server itself scrobbles to Last.fm or ListenBrainz (Navidrome's per-user settings), it forwards them, so server tracks reach ListenBrainz without a token in BitChord. |
+| Play reporting | Now-playing and finished plays are sent to the server, in addition to Last.fm / ListenBrainz. No Last.fm account is needed for this: if the server itself scrobbles to Last.fm or ListenBrainz (Navidrome's per-user settings), it forwards them, so server tracks reach ListenBrainz without a token in Rizumu. |
 | Lyrics | OpenSubsonic structured lyrics (with timings), falling back to the server's own tag reader |
-| Downloads & offline | The normal BitChord downloader; lossless keeps the original file |
+| Downloads & offline | The normal Rizumu downloader; lossless keeps the original file |
 | Multiple servers | Each is its own source, tried in the order shown on the Sources screen |
 
 ## What is not supported yet

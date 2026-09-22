@@ -53,11 +53,11 @@ val listenTogetherServer: String = (
     ).trim().trimEnd('/')
 
 android {
-    namespace = "com.music.bitchord"
+    namespace = "com.music.rizumu"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.music.bitchord"
+        applicationId = "com.music.rizumu"
         // 26 keeps reach wide; real-time blur (RenderEffect) kicks in on API 31+,
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
@@ -100,8 +100,8 @@ android {
     productFlavors {
         create("dev") {
             dimension = "env"
-            applicationId = "com.dev.bitchord"
-            resValue("string", "app_name", "BitChord Dev")
+            applicationId = "com.dev.rizumu"
+            resValue("string", "app_name", "Rizumu Dev")
         }
         create("prod") {
             dimension = "env"
