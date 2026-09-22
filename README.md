@@ -142,3 +142,22 @@ BitChord is an independent, community-driven third-party audio player and client
 This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. See the [LICENSE](LICENSE) file for details.
 
 </div>
+
+---
+
+<div align="center">
+
+<h1><a id="credits"></a>Credits</h1>
+
+This project is a fork of **[BitChord](https://github.com/kushagrasinghx/BitChord)** by
+[Kushagra Singh](https://github.com/kushagrasinghx) — the original Android YouTube
+Music client it is built on. The app, its design, its playback engine, its sources
+layer and its documentation are his work.
+
+What this fork adds on top: native Subsonic/OpenSubsonic server support
+(Navidrome, Airsonic, Gonic, Ampache, Jellyfin) and the primary-library mode that
+builds the app around your own server, with YouTube Music as the fallback.
+
+Upstream source: <https://github.com/kushagrasinghx/BitChord>
+
+</div>
