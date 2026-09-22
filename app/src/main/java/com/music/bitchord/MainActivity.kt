@@ -692,6 +692,14 @@ private fun BitChordApp(
             .filter { it.kind == SourceKind.SUBSONIC && it.enabled && it.isComplete }
             .joinToString { "${it.id}@${it.baseUrl}" }
     }
+    val serverMode = primaryLibrary == PrimaryLibrary.SERVER
+    // Which tabs the bar shows, and in which order. Server mode has no
+    // Explore: that tab is YouTube's editorial front page, and in server mode
+    // YouTube is a fallback rather than somewhere to browse.
+    val visibleTabs = remember(serverMode) {
+        if (serverMode) listOf(TAB_HOME, TAB_LIBRARY, TAB_SEARCH)
+        else listOf(TAB_HOME, TAB_EXPLORE, TAB_LIBRARY, TAB_SEARCH)
+    }
 
     // Settings has no tab of its own — it sits on top of whatever tab was
     // selected. A pushed album/artist page (from the player, search, etc.)
@@ -895,6 +903,14 @@ private fun BitChordApp(
             BottomTab(libraryLabel, BitChordIcons.Library),
             BottomTab(searchLabel, BitChordIcons.Search),
         )
+    }
+    /** [tabs] reduced to the ones this mode shows, in the same order. */
+    val barTabs = remember(tabs, visibleTabs) { visibleTabs.map { tabs[it] } }
+
+    // Leaving Explore while in server mode: the tab is gone from the bar, so a
+    // selection left on it would be a screen with no way back to itself.
+    LaunchedEffect(serverMode) {
+        if (serverMode && selectedTab == TAB_EXPLORE) selectedTab = TAB_HOME
     }
 
     val scope = rememberCoroutineScope()
@@ -2214,6 +2230,7 @@ private fun BitChordApp(
                             signedIn = signedIn,
                             account = account,
                             channelName = selectedChannelName,
+                            serverMode = serverMode,
                             onSignIn = {
                                 showAccountScrobbling = false
                                 showSettings = false
@@ -2275,6 +2292,7 @@ private fun BitChordApp(
                             onTranslationLanguage = { showTranslationLanguage = true },
                             onSources = { showSources = true },
                             onPrimaryLibrary = { showPrimaryLibraryChooser = true },
+                            serverMode = serverMode,
                             onListenTogether = { showListenTogether = true },
                             onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
                             onAppLanguage = { showAppLanguage = true },
@@ -2437,8 +2455,9 @@ private fun BitChordApp(
                             onAddSuggested = { song -> viewModel.addSuggestedSong(page.browseId, song) },
                             // Saving is an account action, so it isn't offered to a
                             // guest at all — same as the like and add-to-playlist rows
-                            // in the track menu.
-                            onToggleLibrary = if (signedIn) {
+                            // in the track menu. Nor in server mode, where there is
+                            // no account surface to save against.
+                            onToggleLibrary = if (signedIn && !serverMode) {
                                 { viewModel.toggleLibrary(page.browseId) }
                             } else {
                                 null
@@ -2446,7 +2465,7 @@ private fun BitChordApp(
                             // Same rule for the artist page's subscribe circle:
                             // a channel subscription is the account's, so a
                             // guest is never shown the button.
-                            onToggleSubscription = if (signedIn) {
+                            onToggleSubscription = if (signedIn && !serverMode) {
                                 { viewModel.toggleSubscription(page.browseId) }
                             } else {
                                 null
@@ -2906,16 +2925,21 @@ private fun BitChordApp(
                             // [TopBarDownloadButton], which decides that for
                             // itself rather than being told.
                             TopBarDownloadButton(onClick = { showDownloadManager = true })
-                            TopBarAccountButton(
-                                account = account,
-                                onClick = {
-                                    if (signedIn) {
-                                        viewModel.loadChannels()
-                                        showAccountSelector = true
-                                    } else showSettings = true
-                                },
-                                onSwipeProfile = { forward -> viewModel.stepProfile(forward) },
-                            )
+                            // No Google account surface in server mode. The
+                            // session is kept, not shown — switching back to
+                            // YouTube mode needs no re-login.
+                            if (!serverMode) {
+                                TopBarAccountButton(
+                                    account = account,
+                                    onClick = {
+                                        if (signedIn) {
+                                            viewModel.loadChannels()
+                                            showAccountSelector = true
+                                        } else showSettings = true
+                                    },
+                                    onSwipeProfile = { forward -> viewModel.stepProfile(forward) },
+                                )
+                            }
                         }
                     },
                 )
@@ -2966,9 +2990,9 @@ private fun BitChordApp(
                     // controls dock into the tab bar rather than riding above it,
                     // and the pair folds together on scroll. See [GlassNavBar].
                     GlassNavBar(
-                        tabs = tabs,
-                        selectedIndex = selectedTab,
-                        onTabSelected = onTabSelected,
+                        tabs = barTabs,
+                        selectedIndex = visibleTabs.indexOf(selectedTab).coerceAtLeast(0),
+                        onTabSelected = { position -> onTabSelected(visibleTabs.getOrElse(position) { TAB_HOME }) },
                         scrollConnection = navBarScroll,
                         song = player.song?.takeUnless { playerDocked },
                         isPlaying = player.isPlaying,
@@ -3015,10 +3039,10 @@ private fun BitChordApp(
                         Spacer(Modifier.height(8.dp))
                     }
                     FloatingBottomBar(
-                        tabs = tabs,
-                        selectedIndex = selectedTab,
+                        tabs = barTabs,
+                        selectedIndex = visibleTabs.indexOf(selectedTab).coerceAtLeast(0),
                         hazeState = hazeState,
-                        onTabSelected = onTabSelected,
+                        onTabSelected = { position -> onTabSelected(visibleTabs.getOrElse(position) { TAB_HOME }) },
                     )
                 }
             }
@@ -3154,7 +3178,9 @@ private fun BitChordApp(
             ) {
                 SongActionsSheet(
                     song = song,
-                    signedIn = signedIn,
+                    // No Google account surface in server mode: the rating and
+                    // playlist rows are the account's, so they are not offered.
+                    signedIn = signedIn && !serverMode,
                     likeStatus = likeStatuses[song.videoId] ?: LikeStatus.INDIFFERENT,
                     onPlayNext = { playNext(song); songActions = null },
                     onAddToQueue = { addToQueue(song); songActions = null },
@@ -3167,18 +3193,25 @@ private fun BitChordApp(
                     // in place, and people often thumb a song and then queue it.
                     onToggleLike = { viewModel.toggleLike(song.videoId) },
                     onToggleDislike = { viewModel.toggleDislike(song.videoId) },
-                    onAddToPlaylist = {
-                        songActions = null
-                        // A source-backed track belongs in its own server's
-                        // playlists, not in YouTube's — its id is one YouTube
-                        // has never seen.
-                        val source = SourceRegistry.parseTrackKey(song.videoId)
-                        if (source != null) {
-                            serverPlaylistTarget = song
-                            viewModel.loadServerPlaylists(source.first)
-                        } else {
-                            viewModel.loadPlaylists()
-                            playlistTarget = song
+                    onAddToPlaylist = if (serverMode && SourceRegistry.parseTrackKey(song.videoId) == null) {
+                        // Server mode has no YouTube account, so a YouTube
+                        // track has no playlist to be added to. A server track
+                        // still does — through its own picker.
+                        null
+                    } else {
+                        {
+                            songActions = null
+                            // A source-backed track belongs in its own server's
+                            // playlists, not in YouTube's — its id is one YouTube
+                            // has never seen.
+                            val source = SourceRegistry.parseTrackKey(song.videoId)
+                            if (source != null) {
+                                serverPlaylistTarget = song
+                                viewModel.loadServerPlaylists(source.first)
+                            } else {
+                                viewModel.loadPlaylists()
+                                playlistTarget = song
+                            }
                         }
                     },
                     onRemoveFromPlaylist = when {

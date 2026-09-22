@@ -126,7 +126,12 @@ fun SongActionsSheet(
     onDownload: () -> Unit,
     onToggleLike: () -> Unit,
     onToggleDislike: () -> Unit,
-    onAddToPlaylist: () -> Unit,
+    /**
+     * Adds the track to one of the account's playlists. Null hides the row —
+     * a guest has no playlists to add to, and in server mode a YouTube track
+     * has no account surface at all.
+     */
+    onAddToPlaylist: (() -> Unit)?,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -237,12 +242,14 @@ fun SongActionsSheet(
                 accent = palette.accent,
                 onClick = onToggleDislike,
             )
-            ActionRow(
-                icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                label = stringResource(R.string.add_to_playlist),
-                accent = palette.accent,
-                onClick = onAddToPlaylist,
-            )
+            onAddToPlaylist?.let { add ->
+                ActionRow(
+                    icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
+                    label = stringResource(R.string.add_to_playlist),
+                    accent = palette.accent,
+                    onClick = add,
+                )
+            }
             onRemoveFromPlaylist?.let {
                 ActionRow(
                     icon = Icons.Rounded.PlaylistRemove,

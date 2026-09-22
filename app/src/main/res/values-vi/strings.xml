@@ -1109,4 +1109,6 @@
 
     <string name="server_library_empty">Thư viện của máy chủ này trống</string>
 
+    <string name="scrobbling_subtitle">Last.fm, ListenBrainz và Discord</string>
+
 </resources>

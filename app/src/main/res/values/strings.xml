@@ -1026,4 +1026,6 @@
 
     <string name="server_library_empty">This server’s library is empty</string>
 
+    <string name="scrobbling_subtitle">Last.fm, ListenBrainz and Discord</string>
+
 </resources>

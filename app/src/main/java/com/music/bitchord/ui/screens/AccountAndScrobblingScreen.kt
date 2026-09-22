@@ -44,6 +44,13 @@ fun AccountAndScrobblingScreen(
     onOpenDiscord: () -> Unit,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
+    /**
+     * Whether the app is built around a music server. Hides everything that
+     * belongs to the Google account — the card, the profile switcher and sign
+     * out — leaving the scrobbling and presence integrations, which are
+     * accounts of their own.
+     */
+    serverMode: Boolean = false,
 ) {
     val lastfmEnabled by AppSettings.lastfmEnabled.collectAsStateWithLifecycle()
     val lastfmUsername by AppSettings.lastfmUsername.collectAsStateWithLifecycle()
@@ -68,28 +75,32 @@ fun AccountAndScrobblingScreen(
             .padding(contentPadding),
     ) {
         Text(
-            text = stringResource(R.string.account_integrations),
+            text = stringResource(if (serverMode) R.string.scrobbling else R.string.account_integrations),
             style = MaterialTheme.typography.displayLarge,
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 14.dp),
         )
 
-        AccountCard(signedIn = signedIn, account = account, onSignIn = onSignIn, onClick = onSwitchChannel)
+        // The Google side of this screen, absent in server mode: there is no
+        // account surface to show, and the stored session stays stored.
+        if (!serverMode) {
+            AccountCard(signedIn = signedIn, account = account, onSignIn = onSignIn, onClick = onSwitchChannel)
 
-        if (signedIn) {
-            SettingsGroup(
-                footer = stringResource(R.string.account_profiles_help),
-            ) {
-                SettingsRow(
-                    icon = Icons.Rounded.SwitchAccount,
-                    title = stringResource(R.string.listen_as),
-                    subtitle = channelName ?: stringResource(R.string.default_youtube_profile),
-                    onClick = onSwitchChannel,
-                )
-            }
+            if (signedIn) {
+                SettingsGroup(
+                    footer = stringResource(R.string.account_profiles_help),
+                ) {
+                    SettingsRow(
+                        icon = Icons.Rounded.SwitchAccount,
+                        title = stringResource(R.string.listen_as),
+                        subtitle = channelName ?: stringResource(R.string.default_youtube_profile),
+                        onClick = onSwitchChannel,
+                    )
+                }
 
-            SettingsGroup {
-                DestructiveRow(label = stringResource(R.string.sign_out), onClick = onSignOut)
+                SettingsGroup {
+                    DestructiveRow(label = stringResource(R.string.sign_out), onClick = onSignOut)
+                }
             }
         }
 
