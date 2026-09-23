@@ -357,6 +357,63 @@ class SubsonicSourceTest {
     }
 
     @Test
+    fun `genres map through and a genre page carries its songs`() = runBlocking {
+        route(
+            "/rest/getGenres",
+            ok(
+                ""","genres":{"genre":[{"value":"Trip-Hop","songCount":12,"albumCount":3},""" +
+                    """{"value":"  ","songCount":0}]}""",
+            ),
+        )
+        route(
+            "/rest/getSongsByGenre",
+            ok(""","songsByGenre":{"song":[{"id":"300","title":"Teardrop","duration":330,"suffix":"flac","bitRate":1411}]}"""),
+        )
+
+        val source = source()
+        val genres = source.genres()
+        assertEquals("Trip-Hop", genres.single().name)
+        assertEquals(12, genres.single().songCount)
+        assertEquals(3, genres.single().albumCount)
+
+        val songs = source.songsByGenre("Trip-Hop", size = 200)
+        assertEquals("Teardrop", songs.single().title)
+        val request = seen.last()
+        assertEquals("/rest/getSongsByGenre", request.requestUrl?.encodedPath)
+        assertEquals("Trip-Hop", request.requestUrl?.queryParameter("genre"))
+        assertEquals("200", request.requestUrl?.queryParameter("count"))
+    }
+
+    @Test
+    fun `a decade asks the server for its year range`() = runBlocking {
+        route(
+            "/rest/getRandomSongs",
+            ok(""","randomSongs":{"song":[{"id":"300","title":"Teardrop","duration":330,"suffix":"flac","bitRate":1411}]}"""),
+        )
+
+        source().randomSongs(size = 200, fromYear = 1990, toYear = 1999)
+
+        val request = seen.single()
+        assertEquals("200", request.requestUrl?.queryParameter("size"))
+        assertEquals("1990", request.requestUrl?.queryParameter("fromYear"))
+        assertEquals("1999", request.requestUrl?.queryParameter("toYear"))
+    }
+
+    @Test
+    fun `a genre and a decade survive a browse key round trip`() {
+        val genre = SourceRegistry.browseKey("cfg-1", ServerBrowseKind.GENRE, "Trip-Hop")
+        val decade = SourceRegistry.browseKey("cfg-1", ServerBrowseKind.DECADE, "1990-1999")
+        assertEquals(
+            ServerBrowseRef("cfg-1", ServerBrowseKind.GENRE, "Trip-Hop"),
+            SourceRegistry.parseBrowseKey(genre),
+        )
+        assertEquals(
+            ServerBrowseRef("cfg-1", ServerBrowseKind.DECADE, "1990-1999"),
+            SourceRegistry.parseBrowseKey(decade),
+        )
+    }
+
+    @Test
     fun `playlist writes reach the server`() = runBlocking {
         route("/rest/createPlaylist", ok(""","playlist":{"id":"pl-9","name":"New"}"""))
         route("/rest/updatePlaylist", ok())

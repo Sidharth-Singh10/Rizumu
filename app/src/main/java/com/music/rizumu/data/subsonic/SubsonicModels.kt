@@ -220,6 +220,12 @@ data class SubsonicRandomSongsResponse(
     val randomSongs: SubsonicSongs = SubsonicSongs(),
 )
 
+/** `getSongsByGenre`'s envelope payload. */
+@Serializable
+data class SubsonicSongsByGenreResponse(
+    val songsByGenre: SubsonicSongs = SubsonicSongs(),
+)
+
 /** `getTopSongs`' envelope payload. */
 @Serializable
 data class SubsonicTopSongsResponse(

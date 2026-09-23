@@ -706,6 +706,16 @@
     <string name="shelf_forgotten_favorites">Giai điệu quen thuộc</string>
     <string name="shelf_recommended_music_videos">Video âm nhạc đề xuất</string>
     <string name="shelf_from_your_library">Từ thư viện của bạn</string>
+
+    <string name="shelf_recently_played">Nghe gần đây</string>
+
+    <string name="shelf_most_played">Nghe nhiều nhất</string>
+
+    <string name="genres">Thể loại</string>
+
+    <string name="decades">Thập niên</string>
+
+    <string name="shuffle_all">Phát ngẫu nhiên tất cả</string>
     <string name="shelf_charts">Bảng xếp hạng</string>
     <string name="shelf_new_releases">Bản phát hành mới</string>
     <string name="shelf_top_music_videos">Video âm nhạc hàng đầu</string>

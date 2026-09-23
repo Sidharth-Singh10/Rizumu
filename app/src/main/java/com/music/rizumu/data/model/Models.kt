@@ -344,6 +344,22 @@ data class ServerLibraryPage(
     val isEmpty: Boolean get() = shelves.isEmpty()
 }
 
+/**
+ * The Play tab when the server is the primary library.
+ *
+ * A dashboard rather than a listing: [shelves] are the dynamic rows —
+ * recently played, most played, recently added, genres, decades — and
+ * [shuffleArtwork] dresses the hero action that queues a random sample of the
+ * whole library. The static browse rows live on the Library tab, so the two
+ * tabs do not repeat each other.
+ */
+data class ServerHomePage(
+    val serverName: String = "",
+    val shelves: List<HomeShelf> = emptyList(),
+    /** A cover for the shuffle hero, from the newest release the server listed. */
+    val shuffleArtwork: String? = null,
+)
+
 /** A browsed album / artist / playlist page. */
 data class DetailPage(
     val browseId: String,

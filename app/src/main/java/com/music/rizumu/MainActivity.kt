@@ -126,6 +126,7 @@ import com.music.rizumu.data.model.LikeStatus
 import com.music.rizumu.data.model.PlaybackSourceType
 import com.music.rizumu.data.model.SearchFilter
 import com.music.rizumu.data.model.SearchResult
+import com.music.rizumu.data.model.ServerHomePage
 import com.music.rizumu.data.model.ShelfItem
 import com.music.rizumu.data.model.Song
 import com.music.rizumu.data.model.UiState
@@ -144,6 +145,7 @@ import com.music.rizumu.ui.screens.EqualizerScreen
 import com.music.rizumu.ui.screens.HistoryScreen
 import com.music.rizumu.ui.screens.ListenTogetherScreen
 import com.music.rizumu.ui.screens.SettingsScreen
+import com.music.rizumu.ui.screens.ServerHomeScreen
 import com.music.rizumu.ui.screens.ServerLibraryScreen
 import com.music.rizumu.ui.screens.SourceEditorAlert
 import com.music.rizumu.ui.screens.SourcesScreen
@@ -682,6 +684,7 @@ private fun RizumuApp(
     val serverPlaylists by viewModel.serverPlaylists.collectAsStateWithLifecycle()
     val primaryLibrary by AppSettings.primaryLibrary.collectAsStateWithLifecycle()
     val serverHome by viewModel.serverHome.collectAsStateWithLifecycle()
+    val serverHomeRefreshing by viewModel.serverHomeRefreshing.collectAsStateWithLifecycle()
     val serverLibrary by viewModel.serverLibrary.collectAsStateWithLifecycle()
     val serverLibraryRefreshing by viewModel.serverLibraryRefreshing.collectAsStateWithLifecycle()
     val sourceConfigs by SourceRegistry.configs.collectAsStateWithLifecycle()
@@ -827,6 +830,7 @@ private fun RizumuApp(
     val explorePull = rememberPullToRefreshState()
     val libraryPull = rememberPullToRefreshState()
     val serverLibraryPull = rememberPullToRefreshState()
+    val serverHomePull = rememberPullToRefreshState()
     val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
     val currentFeed = when {
         showSettings || showAccountScrobbling || detail != null -> null
@@ -851,10 +855,12 @@ private fun RizumuApp(
         }
     }
 
+    // In server mode both tabs are server pages with their own pull states, and
+    // the top-bar indicator has to follow the one actually on screen.
     val currentPull = when (currentFeed) {
-        MainViewModel.Feed.HOME -> homePull
+        MainViewModel.Feed.HOME -> if (serverMode) serverHomePull else homePull
         MainViewModel.Feed.EXPLORE -> explorePull
-        MainViewModel.Feed.LIBRARY -> libraryPull
+        MainViewModel.Feed.LIBRARY -> if (serverMode) serverLibraryPull else libraryPull
         null -> null
     }
     val scrolled by remember(currentListState) {
@@ -1418,6 +1424,41 @@ private fun RizumuApp(
     val onShelfLongPress: (ShelfItem) -> Unit = { item ->
         val song = shelfSong(item)
         if (song != null) openSongMenu(song) else onBrowseLongPress(item)
+    }
+
+    /**
+     * A tap on a card on one of the server's pages.
+     *
+     * The same dispatch the YouTube feeds make — a track card plays, a
+     * collection card opens — with two differences. The artist comes off the
+     * card as it stands rather than through the subtitle parser, because on a
+     * server card the subtitle *is* the artist and not a `Song • Artist` line;
+     * and a track card plays as a queue of one rather than starting a station,
+     * because in server mode YouTube is a fallback and a radio built from its
+     * catalogue is not what the card was about.
+     */
+    val serverCardClick: (ShelfItem) -> Unit = { item ->
+        val videoId = item.videoId
+        when {
+            videoId != null -> playFrom(
+                listOf(
+                    Song(
+                        videoId = videoId,
+                        title = item.title,
+                        artist = item.subtitle,
+                        thumbnailUrl = item.thumbnailUrl,
+                    ),
+                ),
+                0,
+                QueueSource(item.title, PlaybackSourceType.BROWSE, null),
+            )
+            item.browseId != null -> viewModel.openDetail(
+                browseId = item.browseId,
+                title = item.title,
+                subtitle = item.subtitle,
+                thumbnailUrl = item.thumbnailUrl,
+            )
+        }
     }
 
     /**
@@ -2185,8 +2226,13 @@ private fun RizumuApp(
                             LibraryGridPage(
                                 shelf = shelf,
                                 gridState = libraryShowAllGridState,
-                                onItemClick = onLibraryItemClick,
-                                onItemLongPress = onBrowseLongPress,
+                                // Which page opened this grid decides who
+                                // handles its cards: a server row's cards carry
+                                // `srcb:` / `src:` ids that only the server
+                                // paths understand, and the YouTube library's
+                                // carry neither.
+                                onItemClick = if (serverMode) serverCardClick else onLibraryItemClick,
+                                onItemLongPress = if (serverMode) onShelfLongPress else onBrowseLongPress,
                                 // Only the Playlists shelf can grow one — see
                                 // [PlaylistShelf]. Never in server mode: the
                                 // button makes a YouTube playlist, and that
@@ -2487,12 +2533,17 @@ private fun RizumuApp(
                     } else when (key.removePrefix(TAB_KEY).toIntOrNull() ?: selectedTab) {
                         TAB_HOME -> if (primaryLibrary == PrimaryLibrary.SERVER) {
                             // The server is the primary library: this tab is its
-                            // home — the same page its own card opens, rendered
-                            // here rather than pushed, because a tab is not a
-                            // page you travel to. Loaded by the feed effect when
-                            // this tab becomes current.
-                            val home = serverHome
-                            if (home == null) {
+                            // dashboard rather than a listing. The hero queues a
+                            // random sample of the whole library; the shelves
+                            // below are the server's dynamic rows — recently
+                            // played, most played, new releases, genres and
+                            // decades. The static browse rows (playlists,
+                            // artists, starred) are on the Library tab. Loaded by
+                            // the feed effect when this tab becomes current.
+                            val page = serverHome
+                            if (page is UiState.Loading && serverKey.isEmpty()) {
+                                // No server configured at all: the prompt to add
+                                // one, rather than a spinner that cannot finish.
                                 ServerHomeEmpty(
                                     contentPadding = listPadding,
                                     onAddServer = {
@@ -2501,61 +2552,33 @@ private fun RizumuApp(
                                     },
                                 )
                             } else {
-                                DetailScreen(
-                                    page = home,
-                                    currentSong = player.song,
-                                    isPlaying = player.isPlaying,
+                                ServerHomeScreen(
+                                    state = page,
                                     listState = homeListState,
-                                    onSongClick = { songs, index ->
-                                        playFrom(
-                                            songs,
-                                            index,
-                                            QueueSource(home.title, PlaybackSourceType.BROWSE, home.browseId),
-                                        )
-                                    },
-                                    onSongLongPress = { openSongMenu(it) },
-                                    onSongSwipe = onSongSwipe,
-                                    onShuffle = { songs ->
-                                        QueueShuffle.enableForNextQueue()
-                                        playFrom(
-                                            songs,
-                                            songs.indices.random(),
-                                            QueueSource(home.title, PlaybackSourceType.BROWSE, home.browseId),
-                                        )
-                                    },
-                                    onSectionItemClick = { item ->
-                                        item.browseId?.let { id ->
-                                            viewModel.openDetail(
-                                                browseId = id,
-                                                title = item.title,
-                                                subtitle = item.subtitle,
-                                                thumbnailUrl = item.thumbnailUrl,
-                                                type = BrowseType.ALBUM,
-                                            )
+                                    refreshing = serverHomeRefreshing,
+                                    pullState = serverHomePull,
+                                    onRefresh = viewModel::refreshServerHome,
+                                    onShuffleAll = {
+                                        scope.launch {
+                                            val songs = viewModel.shuffleAllSongs()
+                                            if (songs.isNotEmpty()) {
+                                                QueueShuffle.enableForNextQueue()
+                                                playFrom(
+                                                    songs,
+                                                    0,
+                                                    QueueSource(
+                                                        (page as? UiState.Success<ServerHomePage>)
+                                                            ?.data?.serverName.orEmpty(),
+                                                        PlaybackSourceType.BROWSE,
+                                                        null,
+                                                    ),
+                                                )
+                                            }
                                         }
                                     },
-                                    onSectionItemLongPress = onBrowseLongPress,
-                                    onMore = { songs ->
-                                        browseActions = BrowseTarget(
-                                            browseId = home.browseId,
-                                            title = home.title,
-                                            subtitle = home.subtitle,
-                                            thumbnailUrl = home.thumbnailUrl,
-                                            type = home.type,
-                                            songs = songs,
-                                            fromCard = false,
-                                        )
-                                    },
-                                    onArtistClick = { id, name ->
-                                        viewModel.openDetail(
-                                            id,
-                                            name,
-                                            context.getString(R.string.artist),
-                                            null,
-                                            BrowseType.ARTIST,
-                                        )
-                                    },
-                                    onAddSuggested = { },
+                                    onItemClick = serverCardClick,
+                                    onItemLongPress = onShelfLongPress,
+                                    onShowAll = { shelf -> libraryShowAll = shelf },
                                     contentPadding = listPadding,
                                 )
                             }

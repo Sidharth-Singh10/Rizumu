@@ -166,13 +166,29 @@ class SubsonicClient(
             deserializer = SubsonicAlbumListResponse.serializer(),
         ).albumList2.album
 
-    /** A random selection from the library, which is what a server home page opens on. */
-    suspend fun randomSongs(size: Int): List<SubsonicSong> =
+    /** A random selection from the library, optionally bounded to a year range. */
+    suspend fun randomSongs(size: Int, fromYear: Int? = null, toYear: Int? = null): List<SubsonicSong> =
         call(
             endpoint = "getRandomSongs",
-            params = mapOf("size" to size.coerceIn(1, MAX_PAGE).toString()),
+            params = buildMap {
+                put("size", size.coerceIn(1, MAX_PAGE).toString())
+                fromYear?.let { put("fromYear", it.toString()) }
+                toYear?.let { put("toYear", it.toString()) }
+            },
             deserializer = SubsonicRandomSongsResponse.serializer(),
         ).randomSongs.song
+
+    /** Songs filed under one genre, for a genre page. */
+    suspend fun songsByGenre(genre: String, size: Int, offset: Int = 0): List<SubsonicSong> =
+        call(
+            endpoint = "getSongsByGenre",
+            params = mapOf(
+                "genre" to genre,
+                "count" to size.coerceIn(1, MAX_PAGE).toString(),
+                "offset" to offset.coerceAtLeast(0).toString(),
+            ),
+            deserializer = SubsonicSongsByGenreResponse.serializer(),
+        ).songsByGenre.song
 
     /** The server's own idea of an artist's best-known tracks. */
     suspend fun topSongs(artistName: String, count: Int): List<SubsonicSong> =

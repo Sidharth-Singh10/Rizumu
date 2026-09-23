@@ -151,8 +151,20 @@ class SubsonicSource(
             client.albums(type.wire, offset, size).map { it.toServerAlbum() }
         }
 
-    override suspend fun randomSongs(size: Int): List<Song> = withContext(Dispatchers.IO) {
-        client.randomSongs(size).toSongs()
+    override suspend fun randomSongs(size: Int, fromYear: Int?, toYear: Int?): List<Song> =
+        withContext(Dispatchers.IO) {
+            client.randomSongs(size, fromYear, toYear).toSongs()
+        }
+
+    override suspend fun songsByGenre(genre: String, size: Int, offset: Int): List<Song> =
+        withContext(Dispatchers.IO) {
+            client.songsByGenre(genre, size, offset).toSongs()
+        }
+
+    override suspend fun genres(): List<ServerGenre> = withContext(Dispatchers.IO) {
+        client.genres()
+            .filter { it.value.isNotBlank() }
+            .map { ServerGenre(name = it.value, songCount = it.songCount, albumCount = it.albumCount) }
     }
 
     override suspend fun starred(): ServerStarred = withContext(Dispatchers.IO) {

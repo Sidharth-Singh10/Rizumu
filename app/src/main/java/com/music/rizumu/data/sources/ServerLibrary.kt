@@ -37,8 +37,14 @@ interface ServerLibrary {
     /** One page of albums of [type]. */
     suspend fun albums(type: ServerAlbumListType, offset: Int, size: Int): List<ServerAlbum>
 
-    /** A random selection from the library. */
-    suspend fun randomSongs(size: Int): List<Song>
+    /** A random selection from the library, optionally bounded to a year range. */
+    suspend fun randomSongs(size: Int, fromYear: Int? = null, toYear: Int? = null): List<Song>
+
+    /** Songs filed under one genre. */
+    suspend fun songsByGenre(genre: String, size: Int, offset: Int = 0): List<Song>
+
+    /** The genres the library holds, for a discovery row. */
+    suspend fun genres(): List<ServerGenre>
 
     /** Everything the account has starred, by type. */
     suspend fun starred(): ServerStarred
@@ -100,6 +106,13 @@ data class ServerPlaylist(
     val thumbnailUrl: String? = null,
 )
 
+/** One genre on a music server. */
+data class ServerGenre(
+    val name: String,
+    val songCount: Int = 0,
+    val albumCount: Int = 0,
+)
+
 /** An artist page: the artist, their releases, and what the server thinks is best. */
 data class ServerArtistPage(
     val artist: ServerArtist,
@@ -141,7 +154,7 @@ enum class ServerAlbumListType(val wire: String) {
  * an id written by an older build fails to parse rather than opening the wrong
  * kind of page.
  */
-enum class ServerBrowseKind { SERVER, ARTIST, ALBUM, PLAYLIST }
+enum class ServerBrowseKind { SERVER, ARTIST, ALBUM, PLAYLIST, GENRE, DECADE }
 
 /**
  * A parsed server browse id: which server, what kind of page, which row.

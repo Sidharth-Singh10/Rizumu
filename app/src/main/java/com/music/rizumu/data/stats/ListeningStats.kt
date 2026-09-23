@@ -3,6 +3,7 @@ package com.music.rizumu.data.stats
 import android.content.Context
 import android.util.Log
 import com.music.rizumu.data.model.Song
+import com.music.rizumu.data.sources.SourceRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -313,6 +314,31 @@ object ListeningStats {
                 ?.let { runCatching { YearMonth.parse(it) }.getOrNull() }
         }.sorted()
     }
+
+    /**
+     * The most recently played tracks from one source, newest first.
+     *
+     * Only the newest few months are read back. A "recently played" row is
+     * about the last handful of listens, and an older bucket cannot beat a
+     * newer one for that, so reading the whole history would be work for an
+     * answer that never differs.
+     *
+     * Device-local by nature: it is this app's own record of what *it* played.
+     * Plays from other clients against the same server are not in it.
+     */
+    suspend fun recentTracks(configId: String, limit: Int): List<TrackEntry> =
+        withContext(Dispatchers.IO) {
+            flushAndAwait()
+            val merged = LinkedHashMap<String, TrackEntry>()
+            months().asReversed().take(RECENT_MONTHS).forEach { month ->
+                read(month.toString())?.tracks?.forEach { entry ->
+                    merged.merge(entry.id, entry) { existing, newer ->
+                        existing.copy().also { it.absorb(newer) }
+                    }
+                }
+            }
+            recentTracksFor(merged.values, configId, limit)
+        }
 
     private fun read(key: String): StoredBucket? {
         val file = File(directory, "$key.json")
@@ -654,6 +680,14 @@ object ListeningStats {
     private const val KEEP_MONTHS = 36
 
     /**
+     * How many months [recentTracks] reads back.
+     *
+     * Enough to cover a listener who has been away for a few weeks without
+     * parsing three years of history to find the last twenty tracks.
+     */
+    private const val RECENT_MONTHS = 3
+
+    /**
      * Per-month caps. Generous enough that nobody reaches them by listening,
      * tight enough that a bucket stays well under a hundred kilobytes.
      */
@@ -685,6 +719,24 @@ data class TrackEntry(
         if (art == null) art = other.art
     }
 }
+
+/**
+ * The entries belonging to one source, newest first.
+ *
+ * The pure half of [ListeningStats.recentTracks], kept out of the object so the
+ * rule that decides which tracks belong to a server — the `src:{configId}::`
+ * prefix, read back through [SourceRegistry.parseTrackKey] — is a unit test
+ * rather than something only reachable through a device's listening history.
+ */
+internal fun recentTracksFor(
+    entries: Collection<TrackEntry>,
+    configId: String,
+    limit: Int,
+): List<TrackEntry> = entries.asSequence()
+    .filter { SourceRegistry.parseTrackKey(it.id)?.first == configId }
+    .sortedByDescending { it.last }
+    .take(limit)
+    .toList()
 
 /**
  * One artist's or album's totals.

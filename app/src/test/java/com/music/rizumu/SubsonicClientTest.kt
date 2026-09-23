@@ -290,6 +290,46 @@ class SubsonicClientTest {
     }
 
     @Test
+    fun `getRandomSongs sends the size and an optional year range`() = runBlocking {
+        responder = {
+            ok(""","randomSongs":{"song":[{"id":"300","title":"Teardrop","duration":330}]}""")
+        }
+        val songs = client().randomSongs(size = 500, fromYear = 1990, toYear = 1999)
+        assertEquals("Teardrop", songs.single().title)
+        val request = seen.single()
+        assertEquals("/rest/getRandomSongs", pathOf(request))
+        assertEquals("500", query(request, "size"))
+        assertEquals("1990", query(request, "fromYear"))
+        assertEquals("1999", query(request, "toYear"))
+    }
+
+    @Test
+    fun `getRandomSongs without a range leaves the year parameters off`() = runBlocking {
+        responder = {
+            ok(""","randomSongs":{"song":[{"id":"300","title":"Teardrop"}]}""")
+        }
+        client().randomSongs(size = 500)
+        val request = seen.single()
+        assertEquals("500", query(request, "size"))
+        assertNull(query(request, "fromYear"))
+        assertNull(query(request, "toYear"))
+    }
+
+    @Test
+    fun `getSongsByGenre names the genre and the page`() = runBlocking {
+        responder = {
+            ok(""","songsByGenre":{"song":[{"id":"300","title":"Teardrop","genre":"Trip-Hop"}]}""")
+        }
+        val songs = client().songsByGenre("Trip-Hop", size = 200, offset = 40)
+        assertEquals("Teardrop", songs.single().title)
+        val request = seen.single()
+        assertEquals("/rest/getSongsByGenre", pathOf(request))
+        assertEquals("Trip-Hop", query(request, "genre"))
+        assertEquals("200", query(request, "count"))
+        assertEquals("40", query(request, "offset"))
+    }
+
+    @Test
     fun `getPlaylist returns its entries`() = runBlocking {
         responder = {
             ok(

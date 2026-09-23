@@ -38,6 +38,7 @@ import com.music.rizumu.data.model.MoodGenreSection
 import com.music.rizumu.data.model.PlaylistPrivacy
 import com.music.rizumu.data.model.SearchFilter
 import com.music.rizumu.data.model.SearchResult
+import com.music.rizumu.data.model.ServerHomePage
 import com.music.rizumu.data.model.ServerLibraryPage
 import com.music.rizumu.data.model.ShelfItem
 import com.music.rizumu.data.model.Song
@@ -72,6 +73,7 @@ import com.music.rizumu.data.sources.ServerAlbumListType
 import com.music.rizumu.data.sources.ServerArtist
 import com.music.rizumu.data.sources.ServerBrowseKind
 import com.music.rizumu.data.sources.ServerBrowseRef
+import com.music.rizumu.data.sources.ServerGenre
 import com.music.rizumu.data.sources.ServerLibrary
 import com.music.rizumu.data.sources.ServerPlaylist
 import com.music.rizumu.data.sources.ServerStarred
@@ -80,6 +82,8 @@ import com.music.rizumu.data.sources.SourceKind
 import com.music.rizumu.data.sources.SourceRegistry
 import com.music.rizumu.data.sources.SourceResolver
 import com.music.rizumu.data.sources.TrackMatcher
+import com.music.rizumu.data.stats.ListeningStats
+import com.music.rizumu.data.stats.TrackEntry
 import com.music.rizumu.playback.StreamChoice
 import java.util.concurrent.atomic.AtomicLong
 import java.util.Locale
@@ -1905,6 +1909,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** How many albums the server-library tab asks for at once. */
         const val SERVER_LIBRARY_ALBUMS = 100
 
+        /** How many recently played tracks the Play tab shows. */
+        const val SERVER_RECENT_TRACKS = 20
+
+        /** How many genres its discovery row holds. */
+        const val SERVER_GENRE_ROW = 20
+
+        /** How many songs a genre page asks for. */
+        const val SERVER_GENRE_SONGS = 200
+
+        /** How many songs a decade page asks for. */
+        const val SERVER_DECADE_SONGS = 200
+
+        /**
+         * How many tracks the shuffle hero queues.
+         *
+         * One page, and 500 is the endpoint's own cap. On a library larger than
+         * that it is a sample rather than everything, which is what a single
+         * tap can honestly deliver.
+         */
+        const val SERVER_SHUFFLE_SONGS = 500
+
+        /** The decade ranges the Play tab offers, as `1960-1969` ids. */
+        val DECADES: List<String> = (1960..2020 step 10).map { "$it-${it + 9}" }
+
         /**
          * What a page with an empty listing says.
          *
@@ -2123,6 +2151,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ServerBrowseKind.ARTIST -> BrowseType.ARTIST
                 ServerBrowseKind.PLAYLIST -> BrowseType.PLAYLIST
                 ServerBrowseKind.SERVER -> BrowseType.OTHER
+                ServerBrowseKind.GENRE -> BrowseType.OTHER
+                ServerBrowseKind.DECADE -> BrowseType.OTHER
             },
         )
         viewModelScope.launch {
@@ -2224,7 +2254,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ?: return ServerPageLoad(UiState.Error(text(R.string.server_row_missing)))
                 ServerPageLoad(songs = songs.ifEmptyError())
             }
+
+            ServerBrowseKind.GENRE -> {
+                val songs = library.songsByGenre(ref.id, SERVER_GENRE_SONGS)
+                ServerPageLoad(songs = songs.ifEmptyError())
+            }
+
+            ServerBrowseKind.DECADE -> {
+                val (from, to) = decadeYears(ref.id)
+                    ?: return ServerPageLoad(UiState.Error(text(R.string.server_row_missing)))
+                val songs = library.randomSongs(SERVER_DECADE_SONGS, fromYear = from, toYear = to)
+                ServerPageLoad(songs = songs.ifEmptyError())
+            }
         }
+
+    /** The year range a decade id names, or null when it is malformed. */
+    private fun decadeYears(id: String): Pair<Int, Int>? {
+        val parts = id.split('-')
+        val from = parts.getOrNull(0)?.toIntOrNull() ?: return null
+        val to = parts.getOrNull(1)?.toIntOrNull() ?: return null
+        return from to to
+    }
 
     private fun List<Song>.ifEmptyError(): UiState<List<Song>> =
         if (isEmpty()) UiState.Error(text(R.string.no_tracks_here)) else UiState.Success(this)
@@ -2258,6 +2308,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         thumbnailUrl = thumbnailUrl,
         videoId = null,
         browseId = SourceRegistry.browseKey(configId, ServerBrowseKind.ARTIST, id),
+    )
+
+    private fun ServerGenre.toShelfItem(configId: String) = ShelfItem(
+        title = name,
+        subtitle = if (songCount > 0) text(R.string.card_songs_format, songCount) else "",
+        thumbnailUrl = null,
+        videoId = null,
+        browseId = SourceRegistry.browseKey(configId, ServerBrowseKind.GENRE, name),
+    )
+
+    /**
+     * A decade card, whose id carries its own year range: `1960-1969`. The range
+     * is the identity the page loader needs, and putting it in the id keeps the
+     * browse-key scheme — one opaque string — intact.
+     */
+    private fun String.toShelfItem(configId: String) = ShelfItem(
+        title = "${substringBefore('-')}s",
+        subtitle = "",
+        thumbnailUrl = null,
+        videoId = null,
+        browseId = SourceRegistry.browseKey(configId, ServerBrowseKind.DECADE, this),
+    )
+
+    /**
+     * One recently played track. Carries a [videoId] rather than a browse id,
+     * because tapping it plays it — there is no page behind a play.
+     */
+    private fun TrackEntry.toShelfItem() = ShelfItem(
+        title = title,
+        subtitle = artist,
+        thumbnailUrl = art,
+        videoId = id,
+        browseId = null,
     )
 
     private fun updateServerPage(browseId: String, transform: (DetailPage) -> DetailPage) {
@@ -2377,98 +2460,148 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
 
     /**
-     * The Home tab's page when the server is the primary library, or null when
-     * no server is configured.
+     * The Play tab when the server is the primary library.
      *
-     * The same content the server's own page carries — random tracks, newest
-     * releases, playlists, artists, starred — loaded here rather than pushed
-     * onto the detail stack, because a tab is not a page you travel to.
+     * A dashboard of dynamic rows rather than a listing: the shuffle hero
+     * queues a random sample of the whole library, and the shelves are what
+     * the server has to say about this listener — recently played, most
+     * played, recently added, genres and decades. The static browse rows live
+     * on the Library tab, so the two tabs do not repeat each other.
      */
-    private val _serverHome = MutableStateFlow<DetailPage?>(null)
-    val serverHome: StateFlow<DetailPage?> = _serverHome.asStateFlow()
+    private val _serverHome = MutableStateFlow<UiState<ServerHomePage>>(UiState.Loading)
+    val serverHome: StateFlow<UiState<ServerHomePage>> = _serverHome.asStateFlow()
 
-    /** The server the loaded home page describes, and whether a load is in flight. */
+    /** Whether a Play-tab pull-to-refresh is in flight. */
+    private val _serverHomeRefreshing = MutableStateFlow(false)
+    val serverHomeRefreshing: StateFlow<Boolean> = _serverHomeRefreshing.asStateFlow()
+
+    /** The server the loaded page describes, and whether a load is in flight. */
     private var serverHomeKey: String? = null
     private var serverHomeLoading = false
 
     /**
-     * Called when the Home tab becomes current.
+     * Called when the Play tab becomes current.
      *
      * Loads the page only when it is not already loaded for the server in hand.
-     * Switching tabs is not a reason to re-roll the random selection or spend
-     * the requests, so a return visit is a no-op; a server edit changes the key
-     * and does reload.
+     * Switching tabs is not a reason to re-fetch anything, so a return visit is
+     * a no-op; a server edit changes the key and does reload.
      */
     fun onServerHomeShown() {
         val config = primaryServer()
         if (config == null) {
-            _serverHome.value = null
+            _serverHome.value = UiState.Loading
             serverHomeKey = null
             return
         }
         val key = serverKey(config)
         if (serverHomeLoading) return
-        if (serverHomeKey == key && _serverHome.value?.songs is UiState.Success) return
-        loadServerHome(config, key)
+        if (serverHomeKey == key && _serverHome.value is UiState.Success) return
+        loadServerHome(config, key, showIndicator = false)
     }
 
-    private fun loadServerHome(config: SourceConfig, key: String) {
-        val browseId = SourceRegistry.browseKey(config.id, ServerBrowseKind.SERVER, "")
-        // The page stays on screen when the same server is being refreshed —
-        // including after a playlist write invalidated it, which is why the
-        // check is "no content yet, or a different server", not "not this key".
+    /** Forces a reload — the Play tab's pull-to-refresh, and the error retry. */
+    fun refreshServerHome() {
+        val config = primaryServer() ?: return
+        if (serverHomeLoading) return
+        loadServerHome(config, serverKey(config), showIndicator = true)
+    }
+
+    private fun loadServerHome(config: SourceConfig, key: String, showIndicator: Boolean) {
+        // Kept on screen when the same server is refreshed, including after a
+        // playlist write invalidated it; the loading state is for a first load
+        // or for a genuinely different server's dashboard.
         val previousKey = serverHomeKey
-        if (_serverHome.value?.songs !is UiState.Success || (previousKey != null && previousKey != key)) {
-            _serverHome.value = DetailPage(
-                browseId = browseId,
-                title = config.displayName,
-                subtitle = "",
-                thumbnailUrl = null,
-                songs = UiState.Loading,
-            )
+        if (_serverHome.value !is UiState.Success || (previousKey != null && previousKey != key)) {
+            _serverHome.value = UiState.Loading
         }
         serverHomeLoading = true
+        if (showIndicator) _serverHomeRefreshing.value = true
         viewModelScope.launch {
             try {
                 val library = SourceRegistry.instance(config.id) as? ServerLibrary
                 if (library == null) {
-                    updateServerHome(browseId) { it.copy(songs = UiState.Error(text(R.string.server_page_failed))) }
+                    _serverHome.value = UiState.Error(text(R.string.server_page_failed))
                     return@launch
                 }
-                val loaded = loadServerPage(library, ServerBrowseRef(config.id, ServerBrowseKind.SERVER, ""))
-                // Update by id — the mode may have been switched, or the server
-                // changed, while this was in flight.
-                _serverHome.value = DetailPage(
-                    browseId = browseId,
-                    title = config.displayName,
-                    subtitle = loaded.subtitle ?: "",
-                    thumbnailUrl = loaded.artwork,
-                    songs = loaded.songs,
-                    sections = loaded.sections,
-                    description = loaded.description,
-                )
+                _serverHome.value = UiState.Success(buildServerHomePage(config, library))
                 serverHomeKey = key
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 TrackLog.w("Rizumu", "server home failed: ${failure.message}")
-                updateServerHome(browseId) {
-                    it.copy(songs = UiState.Error(failure.message ?: text(R.string.server_page_failed)))
-                }
+                _serverHome.value = UiState.Error(failure.message ?: text(R.string.server_page_failed))
             } finally {
                 serverHomeLoading = false
+                if (showIndicator) _serverHomeRefreshing.value = false
             }
         }
     }
 
+    private suspend fun buildServerHomePage(
+        config: SourceConfig,
+        library: ServerLibrary,
+    ): ServerHomePage {
+        val shelves = mutableListOf<HomeShelf>()
+
+        // Track-level recency, from this device's own history — the protocol
+        // has no per-user recent-songs call, and this is the honest source for
+        // one. Hidden when empty rather than shown as a dead row on a fresh
+        // install.
+        val recent = runCatching { ListeningStats.recentTracks(config.id, SERVER_RECENT_TRACKS) }
+            .getOrDefault(emptyList())
+        if (recent.isNotEmpty()) {
+            shelves += HomeShelf(
+                title = text(R.string.shelf_recently_played),
+                items = recent.map { it.toShelfItem() },
+            )
+        }
+
+        val frequent = library.albums(ServerAlbumListType.FREQUENT, 0, SERVER_ALBUM_ROW)
+        if (frequent.isNotEmpty()) {
+            shelves += HomeShelf(text(R.string.shelf_most_played), frequent.map { it.toShelfItem(config.id) })
+        }
+
+        val newest = library.albums(ServerAlbumListType.NEWEST, 0, SERVER_ALBUM_ROW)
+        if (newest.isNotEmpty()) {
+            shelves += HomeShelf(
+                text(R.string.shelf_new_albums_singles),
+                newest.map { it.toShelfItem(config.id) },
+            )
+        }
+
+        // The discovery rows, and both open playable lists rather than pages of
+        // covers: a genre is a mood, and a decade is a mood with a date on it.
+        val genres = runCatching { library.genres() }.getOrDefault(emptyList())
+        if (genres.isNotEmpty()) {
+            shelves += HomeShelf(
+                title = text(R.string.genres),
+                items = genres.take(SERVER_GENRE_ROW).map { it.toShelfItem(config.id) },
+            )
+        }
+        shelves += HomeShelf(text(R.string.decades), DECADES.map { it.toShelfItem(config.id) })
+
+        return ServerHomePage(
+            serverName = config.displayName,
+            shelves = shelves,
+            shuffleArtwork = newest.firstOrNull()?.thumbnailUrl,
+        )
+    }
+
+    /**
+     * A large random sample from the primary server, for the shuffle hero.
+     *
+     * One request: the endpoint caps a page at 500, and a sample that size is
+     * what "shuffle all" can honestly mean behind a single tap on a library
+     * that may hold a hundred times as many tracks.
+     */
+    suspend fun shuffleAllSongs(): List<Song> {
+        val config = primaryServer() ?: return emptyList()
+        val library = SourceRegistry.instance(config.id) as? ServerLibrary ?: return emptyList()
+        return runCatching { library.randomSongs(SERVER_SHUFFLE_SONGS) }.getOrDefault(emptyList())
+    }
+
     /** The identity of a configured server, for telling "same" from "changed". */
     private fun serverKey(config: SourceConfig): String = "${config.id}@${config.baseUrl}"
-
-    private fun updateServerHome(browseId: String, transform: (DetailPage) -> DetailPage) {
-        _serverHome.value = _serverHome.value
-            ?.takeIf { it.browseId == browseId }
-            ?.let(transform)
-    }
 
     /** Everything the server-library tab shows, loaded together. */
     private val _serverLibrary = MutableStateFlow<UiState<ServerLibraryPage>>(UiState.Loading)
@@ -2592,6 +2725,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ServerBrowseKind.PLAYLIST -> library.playlist(ref.id).orEmpty()
             ServerBrowseKind.ARTIST -> library.artist(ref.id)?.topSongs.orEmpty()
             ServerBrowseKind.SERVER -> library.randomSongs(SERVER_RANDOM_SONGS)
+            ServerBrowseKind.GENRE -> library.songsByGenre(ref.id, SERVER_GENRE_SONGS)
+            ServerBrowseKind.DECADE -> decadeYears(ref.id)
+                ?.let { (from, to) -> library.randomSongs(SERVER_DECADE_SONGS, from, to) }
+                .orEmpty()
         }
     }
 
@@ -3064,4 +3201,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun text(id: Int): String = getApplication<Application>().getString(id)
+
+    /** As [text], for a format string with arguments. */
+    private fun text(id: Int, vararg args: Any): String =
+        getApplication<Application>().getString(id, *args)
 }
