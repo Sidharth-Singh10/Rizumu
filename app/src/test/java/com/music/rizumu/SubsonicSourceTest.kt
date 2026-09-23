@@ -3,6 +3,7 @@ package com.music.rizumu
 import com.music.rizumu.data.settings.AppSettings
 import com.music.rizumu.data.settings.AudioQuality
 import com.music.rizumu.data.sources.ModuleSource
+import com.music.rizumu.data.sources.ServerAlbumListType
 import com.music.rizumu.data.sources.SourceConfig
 import com.music.rizumu.data.sources.SourceHealth
 import com.music.rizumu.data.sources.SourceKind
@@ -397,6 +398,41 @@ class SubsonicSourceTest {
         assertEquals("200", request.requestUrl?.queryParameter("size"))
         assertEquals("1990", request.requestUrl?.queryParameter("fromYear"))
         assertEquals("1999", request.requestUrl?.queryParameter("toYear"))
+    }
+
+    @Test
+    fun `a decade cover asks for one album in its year range`() = runBlocking {
+        route(
+            "/rest/getAlbumList2",
+            ok(""","albumList2":{"album":[{"id":"al-9","name":"Mezzanine","artist":"Massive Attack","year":1998,"coverArt":"al-9"}]}"""),
+        )
+
+        val albums = source().albums(ServerAlbumListType.BY_YEAR, 0, 1, fromYear = 1990, toYear = 1999)
+
+        assertEquals("al-9", albums.single().id)
+        val request = seen.single()
+        assertEquals("/rest/getAlbumList2", request.requestUrl?.encodedPath)
+        assertEquals("byYear", request.requestUrl?.queryParameter("type"))
+        assertEquals("1990", request.requestUrl?.queryParameter("fromYear"))
+        assertEquals("1999", request.requestUrl?.queryParameter("toYear"))
+        assertNull(request.requestUrl?.queryParameter("genre"))
+    }
+
+    @Test
+    fun `a genre cover asks for one album in that genre`() = runBlocking {
+        route(
+            "/rest/getAlbumList2",
+            ok(""","albumList2":{"album":[{"id":"al-9","name":"Mezzanine","artist":"Massive Attack","coverArt":"al-9"}]}"""),
+        )
+
+        source().albums(ServerAlbumListType.BY_GENRE, 0, 1, genre = "Trip-Hop")
+
+        val request = seen.single()
+        assertEquals("/rest/getAlbumList2", request.requestUrl?.encodedPath)
+        assertEquals("byGenre", request.requestUrl?.queryParameter("type"))
+        assertEquals("Trip-Hop", request.requestUrl?.queryParameter("genre"))
+        assertEquals("1", request.requestUrl?.queryParameter("size"))
+        assertNull(request.requestUrl?.queryParameter("fromYear"))
     }
 
     @Test

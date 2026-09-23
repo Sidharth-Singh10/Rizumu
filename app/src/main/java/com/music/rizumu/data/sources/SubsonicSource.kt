@@ -146,9 +146,16 @@ class SubsonicSource(
         client.artists().map { it.toServerArtist() }
     }
 
-    override suspend fun albums(type: ServerAlbumListType, offset: Int, size: Int): List<ServerAlbum> =
+    override suspend fun albums(
+        type: ServerAlbumListType,
+        offset: Int,
+        size: Int,
+        fromYear: Int?,
+        toYear: Int?,
+        genre: String?,
+    ): List<ServerAlbum> =
         withContext(Dispatchers.IO) {
-            client.albums(type.wire, offset, size).map { it.toServerAlbum() }
+            client.albums(type.wire, offset, size, fromYear, toYear, genre).map { it.toServerAlbum() }
         }
 
     override suspend fun randomSongs(size: Int, fromYear: Int?, toYear: Int?): List<Song> =

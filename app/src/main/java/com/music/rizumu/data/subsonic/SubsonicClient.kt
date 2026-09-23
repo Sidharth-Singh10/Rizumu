@@ -153,16 +153,28 @@ class SubsonicClient(
 
     /**
      * One page of albums of [type] — `newest`, `recent`, `frequent`,
-     * `alphabeticalByName`, `random` — in the server's own order.
+     * `alphabeticalByName`, `random`, `byYear`, `byGenre` — in the server's own
+     * order. [fromYear] and [toYear] bound a `byYear` listing and [genre]
+     * names a `byGenre` one; every other type leaves them off the request.
      */
-    suspend fun albums(type: String, offset: Int, size: Int): List<SubsonicAlbum> =
+    suspend fun albums(
+        type: String,
+        offset: Int,
+        size: Int,
+        fromYear: Int? = null,
+        toYear: Int? = null,
+        genre: String? = null,
+    ): List<SubsonicAlbum> =
         call(
             endpoint = "getAlbumList2",
-            params = mapOf(
-                "type" to type,
-                "size" to size.coerceIn(1, MAX_PAGE).toString(),
-                "offset" to offset.coerceAtLeast(0).toString(),
-            ),
+            params = buildMap {
+                put("type", type)
+                put("size", size.coerceIn(1, MAX_PAGE).toString())
+                put("offset", offset.coerceAtLeast(0).toString())
+                fromYear?.let { put("fromYear", it.toString()) }
+                toYear?.let { put("toYear", it.toString()) }
+                genre?.let { put("genre", it) }
+            },
             deserializer = SubsonicAlbumListResponse.serializer(),
         ).albumList2.album
 

@@ -855,17 +855,45 @@ internal fun ShelfCard(
                 }
             }
             else -> {
-                AsyncImage(
-                    model = item.thumbnailUrl.artworkAt(CARD_ART_PX),
-                    contentDescription = null,
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .thumbnailBorder(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                )
+                val artwork = item.thumbnailUrl
+                if (artwork != null) {
+                    AsyncImage(
+                        model = artwork.artworkAt(CARD_ART_PX),
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .thumbnailBorder(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
+                } else {
+                    // A card the server has no cover for — a genre, a decade,
+                    // a track whose file carries no art — still gets a face.
+                    // The title picks one of a few still meshes, so the same
+                    // card keeps the same colour between visits.
+                    val palette = remember(item.title) { coverlessPalette(item.title) }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        MeshGradientBackground(
+                            palette = palette,
+                            animated = false,
+                            blurRadius = 24.dp,
+                        )
+                        Icon(
+                            imageVector = RizumuIcons.MusicNote,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp),
+                        )
+                    }
+                }
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -901,3 +929,24 @@ internal fun ShelfCard(
         )
     }
 }
+
+/**
+ * Covers for cards that have no cover of their own, picked from the title so
+ * the same card always draws the same one.
+ *
+ * Bluer and darker than the player's full-screen palettes: a shelf of these
+ * sits beside real album sleeves and has to read as a stand-in rather than as
+ * a louder second cover. Drawn still — no drift, no crossfade — because a row
+ * of a dozen of them must not cost a blurred layer each.
+ */
+private val COVERLESS_PALETTES = listOf(
+    listOf(Color(0xFF3A1C71), Color(0xFFD76D77), Color(0xFF2B5876), Color(0xFF4E4376)),
+    listOf(Color(0xFF134E5E), Color(0xFF71B280), Color(0xFF1F4037), Color(0xFF2C5364)),
+    listOf(Color(0xFF42275A), Color(0xFF734B6D), Color(0xFF2B5876), Color(0xFF4B6CB7)),
+    listOf(Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364), Color(0xFF4B6CB7)),
+    listOf(Color(0xFF6A3093), Color(0xFF41295A), Color(0xFF2F0743), Color(0xFF7F2982)),
+    listOf(Color(0xFFB24592), Color(0xFF3A1C71), Color(0xFF6D3080), Color(0xFF1F1C2C)),
+)
+
+private fun coverlessPalette(key: String): MeshPalette =
+    MeshPalette(COVERLESS_PALETTES[(key.hashCode() and Int.MAX_VALUE) % COVERLESS_PALETTES.size])

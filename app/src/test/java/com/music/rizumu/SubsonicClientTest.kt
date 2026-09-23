@@ -290,6 +290,28 @@ class SubsonicClientTest {
     }
 
     @Test
+    fun `getAlbumList2 carries the year range and the genre`() = runBlocking {
+        responder = {
+            ok(""","albumList2":{"album":[{"id":"al-1","name":"One","artist":"A","coverArt":"al-1"}]}""")
+        }
+        client().albums("byYear", offset = 0, size = 1, fromYear = 1990, toYear = 1999)
+        client().albums("byGenre", offset = 0, size = 1, genre = "Trip-Hop")
+
+        val byYear = seen[0]
+        assertEquals("/rest/getAlbumList2", pathOf(byYear))
+        assertEquals("byYear", query(byYear, "type"))
+        assertEquals("1990", query(byYear, "fromYear"))
+        assertEquals("1999", query(byYear, "toYear"))
+        assertNull(query(byYear, "genre"))
+
+        val byGenre = seen[1]
+        assertEquals("byGenre", query(byGenre, "type"))
+        assertEquals("Trip-Hop", query(byGenre, "genre"))
+        assertNull(query(byGenre, "fromYear"))
+        assertNull(query(byGenre, "toYear"))
+    }
+
+    @Test
     fun `getRandomSongs sends the size and an optional year range`() = runBlocking {
         responder = {
             ok(""","randomSongs":{"song":[{"id":"300","title":"Teardrop","duration":330}]}""")

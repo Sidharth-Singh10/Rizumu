@@ -85,6 +85,7 @@ import com.music.rizumu.data.sources.TrackMatcher
 import com.music.rizumu.data.stats.ListeningStats
 import com.music.rizumu.data.stats.TrackEntry
 import com.music.rizumu.playback.StreamChoice
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import java.util.Locale
 
@@ -1933,6 +1934,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** The decade ranges the Play tab offers, as `1960-1969` ids. */
         val DECADES: List<String> = (1960..2020 step 10).map { "$it-${it + 9}" }
 
+        /** How many discovery covers the Play tab resolves at once. */
+        const val SERVER_ARTWORK_FETCHES = 4
+
         /**
          * What a page with an empty listing says.
          *
@@ -2310,26 +2314,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         browseId = SourceRegistry.browseKey(configId, ServerBrowseKind.ARTIST, id),
     )
 
-    private fun ServerGenre.toShelfItem(configId: String) = ShelfItem(
+    /**
+     * A genre card. The server knows no artwork for a genre, so [artwork] is
+     * whatever the Play tab's fill resolved for it — null until then, and the
+     * card draws its fallback tile in the meantime.
+     */
+    private fun ServerGenre.toShelfItem(configId: String, artwork: String?) = ShelfItem(
         title = name,
         subtitle = if (songCount > 0) text(R.string.card_songs_format, songCount) else "",
-        thumbnailUrl = null,
+        thumbnailUrl = artwork,
         videoId = null,
-        browseId = SourceRegistry.browseKey(configId, ServerBrowseKind.GENRE, name),
+        browseId = genreBrowseKey(configId),
     )
+
+    /** Where a genre card's resolved cover is filed, and what its page opens. */
+    private fun ServerGenre.genreBrowseKey(configId: String): String =
+        SourceRegistry.browseKey(configId, ServerBrowseKind.GENRE, name)
 
     /**
      * A decade card, whose id carries its own year range: `1960-1969`. The range
      * is the identity the page loader needs, and putting it in the id keeps the
-     * browse-key scheme — one opaque string — intact.
+     * browse-key scheme — one opaque string — intact. [artwork] is resolved the
+     * same way a genre's is — see [fillServerDiscoveryArtwork].
      */
-    private fun String.toShelfItem(configId: String) = ShelfItem(
+    private fun String.toShelfItem(configId: String, artwork: String?) = ShelfItem(
         title = "${substringBefore('-')}s",
         subtitle = "",
-        thumbnailUrl = null,
+        thumbnailUrl = artwork,
         videoId = null,
-        browseId = SourceRegistry.browseKey(configId, ServerBrowseKind.DECADE, this),
+        browseId = decadeBrowseKey(configId),
     )
+
+    /** Where a decade card's resolved cover is filed, and what its page opens. */
+    private fun String.decadeBrowseKey(configId: String): String =
+        SourceRegistry.browseKey(configId, ServerBrowseKind.DECADE, this)
 
     /**
      * One recently played track. Carries a [videoId] rather than a browse id,
@@ -2480,6 +2498,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var serverHomeLoading = false
 
     /**
+     * Play-tab discovery covers, keyed by the card's browse id.
+     *
+     * A null value is a card that has been asked about and had nothing to
+     * show, so a refresh does not ask again. The map outlives any one page,
+     * which is what keeps a tab switch or a pull-to-refresh from re-resolving
+     * art that is already on screen.
+     */
+    private val serverDiscoveryArtwork = ConcurrentHashMap<String, String?>()
+
+    /** Cards whose cover is being resolved right now. */
+    private val serverDiscoveryArtworkInFlight = ConcurrentHashMap.newKeySet<String>()
+
+    /**
      * Called when the Play tab becomes current.
      *
      * Loads the page only when it is not already loaded for the server in hand.
@@ -2523,7 +2554,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _serverHome.value = UiState.Error(text(R.string.server_page_failed))
                     return@launch
                 }
-                _serverHome.value = UiState.Success(buildServerHomePage(config, library))
+                val page = buildServerHomePage(config, library)
+                _serverHome.value = UiState.Success(page)
+                // Only once the page is on screen: the fill patches it in
+                // place, and there is nothing to patch before this.
+                fillServerDiscoveryArtwork(library, page)
                 serverHomeKey = key
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
@@ -2571,19 +2606,121 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         // The discovery rows, and both open playable lists rather than pages of
         // covers: a genre is a mood, and a decade is a mood with a date on it.
+        // Neither card has artwork of its own — the protocol has none for a
+        // genre, and a decade is ours — so both start from whatever the last
+        // fill resolved and gain a representative release cover just after the
+        // page is up; see [fillServerDiscoveryArtwork]. Until then the card
+        // draws its fallback tile.
         val genres = runCatching { library.genres() }.getOrDefault(emptyList())
         if (genres.isNotEmpty()) {
             shelves += HomeShelf(
                 title = text(R.string.genres),
-                items = genres.take(SERVER_GENRE_ROW).map { it.toShelfItem(config.id) },
+                items = genres.take(SERVER_GENRE_ROW).map { genre ->
+                    val browseId = genre.genreBrowseKey(config.id)
+                    genre.toShelfItem(config.id, serverDiscoveryArtwork[browseId])
+                },
             )
         }
-        shelves += HomeShelf(text(R.string.decades), DECADES.map { it.toShelfItem(config.id) })
+        shelves += HomeShelf(
+            text(R.string.decades),
+            DECADES.map { range ->
+                range.toShelfItem(config.id, serverDiscoveryArtwork[range.decadeBrowseKey(config.id)])
+            },
+        )
 
         return ServerHomePage(
             serverName = config.displayName,
             shelves = shelves,
             shuffleArtwork = newest.firstOrNull()?.thumbnailUrl,
+        )
+    }
+
+    /**
+     * Gives every genre and decade card a cover, without holding the page up.
+     *
+     * Neither card can carry a cover of its own: `getGenres` returns names and
+     * counts, and a decade is ours rather than the server's. But both name a
+     * set of releases, and one album out of that set is an honest picture of
+     * it — so the card borrows the first release the album list returns for
+     * it, and a refresh keeps it, because the list is ordered by the server and
+     * not by us. The lookups run a few at a time and land on the cards as they
+     * resolve; a server that refuses either list type just leaves the fallback
+     * tile in place, and the page never fails because a cover could not be
+     * found.
+     */
+    private fun fillServerDiscoveryArtwork(library: ServerLibrary, page: ServerHomePage) {
+        val cards = page.shelves.asSequence()
+            .flatMap { it.items.asSequence() }
+            .mapNotNull { item -> item.browseId?.let(SourceRegistry::parseBrowseKey) }
+            .filter { it.kind == ServerBrowseKind.GENRE || it.kind == ServerBrowseKind.DECADE }
+            .distinct()
+            .toList()
+        if (cards.isEmpty()) return
+        viewModelScope.launch {
+            val limiter = Semaphore(SERVER_ARTWORK_FETCHES)
+            coroutineScope {
+                cards.forEach { ref ->
+                    launch {
+                        val browseId = SourceRegistry.browseKey(ref.configId, ref.kind, ref.id)
+                        if (serverDiscoveryArtwork.containsKey(browseId)) return@launch
+                        if (!serverDiscoveryArtworkInFlight.add(browseId)) return@launch
+                        try {
+                            val artwork = limiter.withPermit { resolveServerDiscoveryArtwork(library, ref) }
+                            serverDiscoveryArtwork[browseId] = artwork
+                            artwork?.let { patchServerDiscoveryArtwork(browseId, it) }
+                        } finally {
+                            serverDiscoveryArtworkInFlight.remove(browseId)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * One discovery card's cover: the first album it lists, or nothing.
+     *
+     * A genre that has songs but no albums still has a song with a cover, so
+     * that is the fallback — asked only when the album list came back empty,
+     * to keep the common case to one request. Every failure is swallowed: a
+     * card without art is a worse card, not a broken page.
+     */
+    private suspend fun resolveServerDiscoveryArtwork(
+        library: ServerLibrary,
+        ref: ServerBrowseRef,
+    ): String? = runCatching {
+        when (ref.kind) {
+            ServerBrowseKind.GENRE ->
+                library.albums(ServerAlbumListType.BY_GENRE, 0, 1, genre = ref.id)
+                    .firstOrNull()?.thumbnailUrl
+                    ?: library.songsByGenre(ref.id, size = 1).firstOrNull()?.thumbnailUrl
+
+            ServerBrowseKind.DECADE -> decadeYears(ref.id)?.let { (from, to) ->
+                library.albums(ServerAlbumListType.BY_YEAR, 0, 1, fromYear = from, toYear = to)
+                    .firstOrNull()?.thumbnailUrl
+            }
+
+            else -> null
+        }
+    }.getOrNull()
+
+    /** Puts one resolved cover onto whichever on-screen card asked for it. */
+    private fun patchServerDiscoveryArtwork(browseId: String, artwork: String) {
+        val current = (_serverHome.value as? UiState.Success)?.data ?: return
+        _serverHome.value = UiState.Success(
+            current.copy(
+                shelves = current.shelves.map { shelf ->
+                    if (shelf.items.none { it.browseId == browseId }) {
+                        shelf
+                    } else {
+                        shelf.copy(
+                            items = shelf.items.map { item ->
+                                if (item.browseId == browseId) item.copy(thumbnailUrl = artwork) else item
+                            },
+                        )
+                    }
+                },
+            ),
         )
     }
 

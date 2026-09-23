@@ -34,8 +34,21 @@ interface ServerLibrary {
     /** Every artist the server holds, in the server's own order. */
     suspend fun artists(): List<ServerArtist>
 
-    /** One page of albums of [type]. */
-    suspend fun albums(type: ServerAlbumListType, offset: Int, size: Int): List<ServerAlbum>
+    /**
+     * One page of albums of [type].
+     *
+     * [fromYear] and [toYear] bound a `byYear` listing and [genre] names a
+     * `byGenre` one — the two orderings that identify their rows by something
+     * other than the ordering alone. Every other type ignores them.
+     */
+    suspend fun albums(
+        type: ServerAlbumListType,
+        offset: Int,
+        size: Int,
+        fromYear: Int? = null,
+        toYear: Int? = null,
+        genre: String? = null,
+    ): List<ServerAlbum>
 
     /** A random selection from the library, optionally bounded to a year range. */
     suspend fun randomSongs(size: Int, fromYear: Int? = null, toYear: Int? = null): List<Song>
@@ -143,6 +156,12 @@ enum class ServerAlbumListType(val wire: String) {
     FREQUENT("frequent"),
     ALPHABETICAL_BY_NAME("alphabeticalByName"),
     RANDOM("random"),
+
+    /** Albums in the year range the caller supplies; the decade cards' covers. */
+    BY_YEAR("byYear"),
+
+    /** Albums filed under the genre the caller names; the genre cards' covers. */
+    BY_GENRE("byGenre"),
 }
 
 /**
