@@ -82,6 +82,7 @@ import com.music.rizumu.data.sources.SourceKind
 import com.music.rizumu.data.sources.SourceRegistry
 import com.music.rizumu.data.sources.SourceResolver
 import com.music.rizumu.data.sources.TrackMatcher
+import com.music.rizumu.data.sources.playedArtists
 import com.music.rizumu.data.stats.ListeningStats
 import com.music.rizumu.data.stats.TrackEntry
 import com.music.rizumu.playback.StreamChoice
@@ -1901,7 +1902,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** How many of a server's newest releases its home page shows. */
         const val SERVER_ALBUM_ROW = 20
 
-        /** How many artists a server's home page shows before the list is enough. */
+        /** How many artists a server row shows — the home page's list and the Library's "Your artists". */
         const val SERVER_ARTIST_ROW = 30
 
         /** How many of a server's playlists its home page shows. */
@@ -1909,6 +1910,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** How many albums the server-library tab asks for at once. */
         const val SERVER_LIBRARY_ALBUMS = 100
+
+        /**
+         * How many albums the Library's "Your albums" row holds, and how deep
+         * the two per-user lists are read for "Your artists".
+         *
+         * Deeper than the row shows on purpose: the artist derivation takes its
+         * order from these lists, so a third page of plays is what lets a
+         * listener's wider taste reach the artist row.
+         */
+        const val SERVER_YOUR_ALBUMS = 30
 
         /** How many recently played tracks the Play tab shows. */
         const val SERVER_RECENT_TRACKS = 20
@@ -2591,11 +2602,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
 
-        val frequent = library.albums(ServerAlbumListType.FREQUENT, 0, SERVER_ALBUM_ROW)
-        if (frequent.isNotEmpty()) {
-            shelves += HomeShelf(text(R.string.shelf_most_played), frequent.map { it.toShelfItem(config.id) })
-        }
-
         val newest = library.albums(ServerAlbumListType.NEWEST, 0, SERVER_ALBUM_ROW)
         if (newest.isNotEmpty()) {
             shelves += HomeShelf(
@@ -2806,26 +2812,61 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _serverLibrary.value = UiState.Error(text(R.string.server_page_failed))
                     return@launch
                 }
-                val artists = library.artists()
-                val albums = library.albums(
-                    ServerAlbumListType.ALPHABETICAL_BY_NAME,
-                    0,
-                    SERVER_LIBRARY_ALBUMS,
-                )
-                val playlists = library.playlists()
-                val starred = runCatching { library.starred() }.getOrDefault(ServerStarred())
-                val starredItems = starred.albums.map { it.toShelfItem(config.id) } +
-                    starred.artists.map { it.toShelfItem(config.id) }
-                val shelves = listOfNotNull(
-                    playlists.takeIf { it.isNotEmpty() }
-                        ?.let { list -> HomeShelf(text(R.string.playlists), list.map { it.toShelfItem(config.id) }) },
-                    albums.takeIf { it.isNotEmpty() }
-                        ?.let { list -> HomeShelf(text(R.string.albums), list.map { it.toShelfItem(config.id) }) },
-                    artists.takeIf { it.isNotEmpty() }
-                        ?.let { list -> HomeShelf(text(R.string.artists), list.map { it.toShelfItem(config.id) }) },
-                    starredItems.takeIf { it.isNotEmpty() }
-                        ?.let { items -> HomeShelf(text(R.string.server_starred), items) },
-                )
+                // Every shelf's own calls at once: the tab shows one spinner,
+                // and a slow server should cost one round trip rather than six.
+                // The two per-user lists are best-effort — a server that does
+                // not keep play counts loses the personal rows, not the
+                // library — while the four the tab is built on are not.
+                val shelves = coroutineScope {
+                    val artists = async { library.artists() }
+                    val alphabetical = async {
+                        library.albums(
+                            ServerAlbumListType.ALPHABETICAL_BY_NAME,
+                            0,
+                            SERVER_LIBRARY_ALBUMS,
+                        )
+                    }
+                    val playlists = async { library.playlists() }
+                    val starred = async { runCatching { library.starred() }.getOrDefault(ServerStarred()) }
+                    val frequent = async {
+                        runCatching {
+                            library.albums(ServerAlbumListType.FREQUENT, 0, SERVER_YOUR_ALBUMS)
+                        }.getOrDefault(emptyList())
+                    }
+                    val recent = async {
+                        runCatching {
+                            library.albums(ServerAlbumListType.RECENT, 0, SERVER_YOUR_ALBUMS)
+                        }.getOrDefault(emptyList())
+                    }
+
+                    val knownArtists = artists.await()
+                    val mostPlayed = frequent.await()
+                    val yourArtists = playedArtists(
+                        frequent = mostPlayed,
+                        recent = recent.await(),
+                        known = knownArtists,
+                        limit = SERVER_ARTIST_ROW,
+                    )
+                    val starredItems = starred.await().let { items ->
+                        items.albums.map { it.toShelfItem(config.id) } +
+                            items.artists.map { it.toShelfItem(config.id) }
+                    }
+
+                    listOfNotNull(
+                        playlists.await().takeIf { it.isNotEmpty() }
+                            ?.let { list -> HomeShelf(text(R.string.playlists), list.map { it.toShelfItem(config.id) }) },
+                        yourArtists.takeIf { it.isNotEmpty() }
+                            ?.let { list -> HomeShelf(text(R.string.your_artists), list.map { it.toShelfItem(config.id) }) },
+                        mostPlayed.takeIf { it.isNotEmpty() }
+                            ?.let { list -> HomeShelf(text(R.string.your_albums), list.map { it.toShelfItem(config.id) }) },
+                        alphabetical.await().takeIf { it.isNotEmpty() }
+                            ?.let { list -> HomeShelf(text(R.string.albums), list.map { it.toShelfItem(config.id) }) },
+                        knownArtists.takeIf { it.isNotEmpty() }
+                            ?.let { list -> HomeShelf(text(R.string.artists), list.map { it.toShelfItem(config.id) }) },
+                        starredItems.takeIf { it.isNotEmpty() }
+                            ?.let { items -> HomeShelf(text(R.string.server_starred), items) },
+                    )
+                }
                 _serverLibrary.value = UiState.Success(ServerLibraryPage(shelves))
                 serverLibraryKey = key
             } catch (cancelled: kotlinx.coroutines.CancellationException) {

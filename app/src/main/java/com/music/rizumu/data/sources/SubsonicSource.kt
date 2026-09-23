@@ -373,6 +373,7 @@ class SubsonicSource(
         year = year,
         songCount = songCount,
         thumbnailUrl = client.coverArtUrl(coverArt),
+        artistId = artistId.ifBlank { null },
     )
 
     /** As [SubsonicAlbum.toServerAlbum], for the richer `getAlbum` shape. */
@@ -383,6 +384,7 @@ class SubsonicSource(
         year = year,
         songCount = songCount,
         thumbnailUrl = client.coverArtUrl(coverArt),
+        artistId = artistId.ifBlank { null },
     )
 
     private fun SubsonicPlaylist.toServerPlaylist() = ServerPlaylist(

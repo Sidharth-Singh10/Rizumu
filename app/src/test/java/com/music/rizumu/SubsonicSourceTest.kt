@@ -326,6 +326,36 @@ class SubsonicSourceTest {
     }
 
     @Test
+    fun `album lists carry their type and keep the artist id`() = runBlocking {
+        route(
+            "/rest/getAlbumList2",
+            ok(
+                ""","albumList2":{"album":[{"id":"al-1","name":"Mezzanine","artist":"Massive Attack",""" +
+                    """"artistId":"ar-3","songCount":1}]}""",
+            ),
+        )
+
+        val albums = source().albums(ServerAlbumListType.FREQUENT, offset = 0, size = 30)
+
+        val request = seen.single()
+        assertEquals("frequent", request.requestUrl?.queryParameter("type"))
+        assertEquals("30", request.requestUrl?.queryParameter("size"))
+        // The id the Library's "Your artists" row needs to open the artist the
+        // album names, rather than a card that leads nowhere.
+        assertEquals("ar-3", albums.single().artistId)
+    }
+
+    @Test
+    fun `an album the server gives no artist id for keeps it null`() = runBlocking {
+        route("/rest/getAlbumList2", ok(""","albumList2":{"album":[{"id":"al-1","name":"X","artist":"Y"}]}"""))
+
+        val albums = source().albums(ServerAlbumListType.RECENT, offset = 0, size = 10)
+
+        assertEquals("recent", seen.single().requestUrl?.queryParameter("type"))
+        assertNull(albums.single().artistId)
+    }
+
+    @Test
     fun `a row the server no longer holds is a null page`() = runBlocking {
         route("/rest/getAlbum", failure(70, "Not found"))
         assertNull(source().album("gone"))

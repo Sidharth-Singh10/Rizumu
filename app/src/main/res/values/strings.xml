@@ -912,7 +912,9 @@
 
     <string name="shelf_recently_played">Recently played</string>
 
-    <string name="shelf_most_played">Most played</string>
+    <string name="your_artists">Your artists</string>
+
+    <string name="your_albums">Your albums</string>
 
     <string name="genres">Genres</string>
 

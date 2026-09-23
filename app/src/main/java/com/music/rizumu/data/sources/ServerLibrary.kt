@@ -108,7 +108,52 @@ data class ServerAlbum(
     val year: Int?,
     val songCount: Int,
     val thumbnailUrl: String?,
+    /**
+     * The artist's own id, where the server sends one.
+     *
+     * Carried because an album row is often the only place an artist appears —
+     * see [playedArtists] — and without it there is no way from that row to the
+     * artist's page. Null rather than blank so "the server did not say" and
+     * "the server said nothing useful" are the same case at every use site.
+     */
+    val artistId: String? = null,
 )
+
+/**
+ * The artists behind the albums a listener actually plays.
+ *
+ * [frequent] and [recent] are the server's own per-user album lists, in the
+ * order the server gave them: most played first, then most recently played. An
+ * artist takes the place of the first album of theirs to appear and appears
+ * once, because the protocol has no "frequent artists" call — this is the
+ * honest way to answer the question from what it does keep.
+ *
+ * [known] is the library's artist list, which is where the artist's own
+ * picture and album count come from; an album row names an artist but carries
+ * no face. An artist the server lists albums for but not in its artist index
+ * falls back to the album's cover, and one with no id at all is skipped — a
+ * card that cannot open the artist's page is worse than a shorter row.
+ */
+internal fun playedArtists(
+    frequent: List<ServerAlbum>,
+    recent: List<ServerAlbum>,
+    known: List<ServerArtist>,
+    limit: Int,
+): List<ServerArtist> {
+    if (limit <= 0) return emptyList()
+    val byId = known.associateBy { it.id }
+    val seen = LinkedHashSet<String>()
+    val ordered = mutableListOf<ServerArtist>()
+    for (album in frequent + recent) {
+        val id = album.artistId?.takeIf { it.isNotBlank() } ?: continue
+        if (!seen.add(id)) continue
+        val artist = byId[id]
+        ordered += artist?.copy(thumbnailUrl = artist.thumbnailUrl ?: album.thumbnailUrl)
+            ?: ServerArtist(id = id, name = album.artist, albumCount = 0, thumbnailUrl = album.thumbnailUrl)
+        if (ordered.size == limit) break
+    }
+    return ordered
+}
 
 /** One playlist on a music server. Defaults so the picker can hold a blank row. */
 data class ServerPlaylist(

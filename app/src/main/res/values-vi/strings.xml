@@ -709,7 +709,9 @@
 
     <string name="shelf_recently_played">Nghe gần đây</string>
 
-    <string name="shelf_most_played">Nghe nhiều nhất</string>
+    <string name="your_artists">Nghệ sĩ của bạn</string>
+
+    <string name="your_albums">Album của bạn</string>
 
     <string name="genres">Thể loại</string>
 
