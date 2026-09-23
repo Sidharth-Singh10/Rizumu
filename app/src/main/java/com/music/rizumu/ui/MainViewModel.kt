@@ -2511,12 +2511,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Play-tab discovery covers, keyed by the card's browse id.
      *
-     * A null value is a card that has been asked about and had nothing to
-     * show, so a refresh does not ask again. The map outlives any one page,
-     * which is what keeps a tab switch or a pull-to-refresh from re-resolving
-     * art that is already on screen.
+     * The map outlives any one page, which is what keeps a tab switch or a
+     * pull-to-refresh from re-resolving art that is already on screen — see
+     * [ServerArtworkCache], which also holds the answer for a card that has no
+     * cover, so a refresh does not ask again.
      */
-    private val serverDiscoveryArtwork = ConcurrentHashMap<String, String?>()
+    private val serverDiscoveryArtwork = ServerArtworkCache()
 
     /** Cards whose cover is being resolved right now. */
     private val serverDiscoveryArtworkInFlight = ConcurrentHashMap.newKeySet<String>()
@@ -2623,14 +2623,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 title = text(R.string.genres),
                 items = genres.take(SERVER_GENRE_ROW).map { genre ->
                     val browseId = genre.genreBrowseKey(config.id)
-                    genre.toShelfItem(config.id, serverDiscoveryArtwork[browseId])
+                    genre.toShelfItem(config.id, serverDiscoveryArtwork.get(browseId))
                 },
             )
         }
         shelves += HomeShelf(
             text(R.string.decades),
             DECADES.map { range ->
-                range.toShelfItem(config.id, serverDiscoveryArtwork[range.decadeBrowseKey(config.id)])
+                range.toShelfItem(config.id, serverDiscoveryArtwork.get(range.decadeBrowseKey(config.id)))
             },
         )
 
@@ -2668,11 +2668,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 cards.forEach { ref ->
                     launch {
                         val browseId = SourceRegistry.browseKey(ref.configId, ref.kind, ref.id)
-                        if (serverDiscoveryArtwork.containsKey(browseId)) return@launch
+                        if (serverDiscoveryArtwork.asked(browseId)) return@launch
                         if (!serverDiscoveryArtworkInFlight.add(browseId)) return@launch
                         try {
                             val artwork = limiter.withPermit { resolveServerDiscoveryArtwork(library, ref) }
-                            serverDiscoveryArtwork[browseId] = artwork
+                            serverDiscoveryArtwork.put(browseId, artwork)
                             artwork?.let { patchServerDiscoveryArtwork(browseId, it) }
                         } finally {
                             serverDiscoveryArtworkInFlight.remove(browseId)
