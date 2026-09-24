@@ -284,6 +284,7 @@ fun MediaItem.toSong() = Song(
     artistId = mediaMetadata.extras?.getString(EXTRA_ARTIST_ID),
     albumId = mediaMetadata.extras?.getString(EXTRA_ALBUM_ID),
     albumName = mediaMetadata.albumTitle?.toString(),
+    genre = mediaMetadata.extras?.getString(EXTRA_GENRE),
     isExplicit = mediaMetadata.extras?.takeIf { it.containsKey(EXTRA_EXPLICIT) }
         ?.getBoolean(EXTRA_EXPLICIT),
     isVideo = mediaMetadata.extras?.getBoolean(EXTRA_IS_VIDEO) == true,
@@ -332,6 +333,16 @@ private const val EXTRA_ALBUM_ID = "Rizumu.albumId"
 
 /** @see Song.setVideoId */
 private const val EXTRA_SET_VIDEO_ID = "Rizumu.setVideoId"
+
+/**
+ * The genre the source tagged the track with.
+ *
+ * Carried because the recorder reads the song back through [MediaItem.toSong]
+ * rather than holding the row it was queued from — a field not on the item is
+ * gone by the time a play is filed under it, which is what the Play tab's
+ * genre row is ordered by.
+ */
+private const val EXTRA_GENRE = "Rizumu.genre"
 
 /** @see Song.localUri */
 private const val EXTRA_LOCAL_URI = "Rizumu.localUri"
@@ -530,7 +541,8 @@ fun Song.toMediaItem(): MediaItem {
                 if (fromAutoplay || offlineUri != null || durationText != null ||
                     artistId != null || albumId != null || setVideoId != null ||
                     isExplicit != null || isVideo || isVideoOrigin || radioName != null ||
-                    playbackSource != null || playbackSourceType != null || playbackSourceId != null
+                    playbackSource != null || playbackSourceType != null || playbackSourceId != null ||
+                    genre != null
                 ) {
                     setExtras(
                         bundleOf(
@@ -548,6 +560,7 @@ fun Song.toMediaItem(): MediaItem {
                             EXTRA_EXPLICIT to isExplicit,
                             EXTRA_IS_VIDEO to isVideo,
                             EXTRA_VIDEO_ORIGIN to isVideoOrigin,
+                            EXTRA_GENRE to genre,
                         ),
                     )
                 }
