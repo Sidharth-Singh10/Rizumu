@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -30,6 +31,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -55,6 +60,7 @@ import com.music.rizumu.ui.components.MessageState
 import com.music.rizumu.ui.components.PAGE_GUTTER
 import com.music.rizumu.ui.components.PullToRefresh
 import com.music.rizumu.ui.components.SHELF_CARD_WIDTH
+import com.music.rizumu.ui.components.SearchField
 import com.music.rizumu.ui.components.libraryGrid
 import com.music.rizumu.ui.components.librarySkeleton
 import com.music.rizumu.ui.player.MeshGradientBackground
@@ -456,6 +462,9 @@ fun LibraryGridPage(
     modifier: Modifier = Modifier,
     onNewPlaylist: (() -> Unit)? = null,
 ) {
+    // The shelf's own filter. Kept across a rotation and reset when a different
+    // shelf is opened, keyed the way the page is — by its title.
+    var query by rememberSaveable(shelf.title) { mutableStateOf("") }
     // Re-read live rather than trusting [shelf] to already be sorted: this page
     // is opened from a snapshot (see `libraryShowAll` in MainActivity), and a
     // pin toggled from this page's own long-press menu must move the card
@@ -464,8 +473,10 @@ fun LibraryGridPage(
     val librarySort by AppSettings.librarySort.collectAsStateWithLifecycle()
     // Pinning wins over the default order, but an explicit sort is a stronger,
     // more deliberate signal than a pin and is left to reorder the whole grid,
-    // pinned cards included.
+    // pinned cards included. Filtering runs last, so a search narrows what the
+    // pin and sort decided rather than replacing it.
     val sortedShelf = shelf.pinnedFirst(pinnedPlaylists).sortedForLibrary(librarySort)
+    val matches = remember(sortedShelf.items, query) { sortedShelf.items.matching(query) }
     BoxWithConstraints(modifier.fillMaxSize()) {
         val grid = libraryGrid(maxWidth - PAGE_GUTTER * 2)
         LazyVerticalGrid(
@@ -476,6 +487,17 @@ fun LibraryGridPage(
             verticalArrangement = Arrangement.spacedBy(20.dp),
             modifier = Modifier.padding(horizontal = PAGE_GUTTER),
         ) {
+            item(key = "search", span = { GridItemSpan(maxLineSpan) }) {
+                SearchField(
+                    query = query,
+                    onQueryChange = { query = it },
+                    // The list is filtered as it is typed, so the keyboard's
+                    // search key has nothing left to submit — it just puts the
+                    // keyboard away, which is what SearchField does with it.
+                    onSubmit = {},
+                    placeholder = stringResource(R.string.search_this_list),
+                )
+            }
             if (onNewPlaylist != null) {
                 item(key = "leading") {
                     NewShelfCard(
@@ -487,7 +509,14 @@ fun LibraryGridPage(
                     )
                 }
             }
-            items(sortedShelf.items, key = { it.browseId ?: it.title }) { item ->
+            // An empty shelf has its own words elsewhere; only a search that
+            // came up short is worth explaining here.
+            if (matches.isEmpty() && shelf.items.isNotEmpty()) {
+                item(key = "no-matches", span = { GridItemSpan(maxLineSpan) }) {
+                    MessageState(stringResource(R.string.nothing_matches, query))
+                }
+            }
+            items(matches, key = { it.browseId ?: it.title }) { item ->
                 ShelfCard(
                     item = item,
                     onClick = { onItemClick(item) },
@@ -497,6 +526,30 @@ fun LibraryGridPage(
                 )
             }
         }
+    }
+}
+
+/**
+ * The cards whose title or subtitle contains [query], or every card when the
+ * field is empty.
+ *
+ * The same case-insensitive substring match the release pages and the local
+ * library use — see `DetailScreen.matching` and `LocalMusicScreen.matchesSearch`
+ * — so "search this list" behaves the same wherever it appears. On an album
+ * card the subtitle is the artist and on an artist card it is the release
+ * count, so the filter reaches whatever the card itself shows.
+ *
+ * Only what was loaded can be found: the server's Albums shelf holds the first
+ * hundred alphabetically (`SERVER_LIBRARY_ALBUMS`), and a YouTube shelf stops
+ * at ten pages of continuation. The field narrows the page in front of it; it
+ * is not a library-wide search.
+ */
+internal fun List<ShelfItem>.matching(query: String): List<ShelfItem> {
+    val needle = query.trim()
+    if (needle.isEmpty()) return this
+    return filter { item ->
+        item.title.contains(needle, ignoreCase = true) ||
+            item.subtitle.contains(needle, ignoreCase = true)
     }
 }
 
