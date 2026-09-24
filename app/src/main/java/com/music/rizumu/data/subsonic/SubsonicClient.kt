@@ -221,6 +221,21 @@ class SubsonicClient(
     suspend fun genres(): List<SubsonicGenre> =
         call("getGenres", emptyMap(), SubsonicGenresResponse.serializer()).genres.genre
 
+    /**
+     * Stars or unstars one song.
+     *
+     * `id` names the song itself. The endpoint accepts `albumId` and
+     * `artistId` too, for the other two ID3 media types; this app stars songs.
+     * The answer is only the envelope, hence [SubsonicAck].
+     */
+    suspend fun setSongStarred(songId: String, starred: Boolean) {
+        call(
+            endpoint = if (starred) "star" else "unstar",
+            params = listOf("id" to songId),
+            deserializer = SubsonicAck.serializer(),
+        )
+    }
+
     /** The account's playlists, without their entries. */
     suspend fun playlists(): List<SubsonicPlaylist> =
         call("getPlaylists", emptyMap(), SubsonicPlaylistsResponse.serializer()).playlists.playlist

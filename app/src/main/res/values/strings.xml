@@ -1012,6 +1012,12 @@
 
     <string name="server_starred">Starred</string>
 
+    <string name="server_liked_songs">Liked songs</string>
+
+    <string name="server_unlike">Remove from liked songs</string>
+
+    <string name="server_liked_empty">No liked songs yet</string>
+
     <string name="server_new_playlist_description">Creates a playlist on this server.</string>
 
     <string name="primary_library">Primary library</string>

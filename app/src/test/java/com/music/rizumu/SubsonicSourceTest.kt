@@ -1,5 +1,6 @@
 package com.music.rizumu
 
+import com.music.rizumu.data.ServerLikeState
 import com.music.rizumu.data.settings.AppSettings
 import com.music.rizumu.data.settings.AudioQuality
 import com.music.rizumu.data.sources.ModuleSource
@@ -43,6 +44,7 @@ class SubsonicSourceTest {
 
     @Before
     fun setUp() {
+        ServerLikeState.clear()
         server = MockWebServer()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
@@ -57,6 +59,7 @@ class SubsonicSourceTest {
     @After
     fun tearDown() {
         server.shutdown()
+        ServerLikeState.clear()
         // The rung is process-wide state; a test that moved it puts it back.
         AppSettings.audioQualityWifi.value = AudioQuality.LOSSLESS
         AppSettings.audioQualityCellular.value = AudioQuality.LOSSLESS
@@ -466,6 +469,55 @@ class SubsonicSourceTest {
     }
 
     @Test
+    fun `starring a song reaches the server`() = runBlocking {
+        route("/rest/star", ok())
+        route("/rest/unstar", ok())
+
+        val source = source()
+        source.setSongStarred("300", starred = true)
+        source.setSongStarred("300", starred = false)
+
+        assertEquals("/rest/star", seen[0].requestUrl?.encodedPath)
+        assertEquals("300", seen[0].requestUrl?.queryParameter("id"))
+        assertEquals("/rest/unstar", seen[1].requestUrl?.encodedPath)
+        assertEquals("300", seen[1].requestUrl?.queryParameter("id"))
+    }
+
+    @Test
+    fun `a starred row arrives liked`() = runBlocking {
+        route(
+            "/rest/getAlbum",
+            ok(
+                ""","album":{"id":"al-12","name":"Mezzanine","artist":"Massive Attack","song":[""" +
+                    """{"id":"300","title":"Teardrop","artist":"Massive Attack","duration":330,"starred":"2024-01-01T00:00:00Z"}]}""",
+            ),
+        )
+
+        val page = source().album("al-12")
+
+        assertTrue(ServerLikeState.isStarred(page!!.songs.single().videoId))
+    }
+
+    @Test
+    fun `a stale starred row does not undo an unstar`() = runBlocking {
+        route(
+            "/rest/getAlbum",
+            ok(
+                ""","album":{"id":"al-12","name":"Mezzanine","artist":"Massive Attack","song":[""" +
+                    """{"id":"300","title":"Teardrop","artist":"Massive Attack","duration":330,"starred":"2024-01-01T00:00:00Z"}]}""",
+            ),
+        )
+
+        val source = source()
+        val key = source.album("al-12")!!.songs.single().videoId
+        ServerLikeState.set(key, false)
+
+        source.album("al-12")
+
+        assertFalse(ServerLikeState.isStarred(key))
+    }
+
+    @Test
     fun `a genre and a decade survive a browse key round trip`() {
         val genre = SourceRegistry.browseKey("cfg-1", ServerBrowseKind.GENRE, "Trip-Hop")
         val decade = SourceRegistry.browseKey("cfg-1", ServerBrowseKind.DECADE, "1990-1999")
@@ -476,6 +528,12 @@ class SubsonicSourceTest {
         assertEquals(
             ServerBrowseRef("cfg-1", ServerBrowseKind.DECADE, "1990-1999"),
             SourceRegistry.parseBrowseKey(decade),
+        )
+        assertEquals(
+            ServerBrowseRef("cfg-1", ServerBrowseKind.STARRED, ""),
+            SourceRegistry.parseBrowseKey(
+                SourceRegistry.browseKey("cfg-1", ServerBrowseKind.STARRED),
+            ),
         )
     }
 

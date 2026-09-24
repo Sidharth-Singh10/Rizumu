@@ -62,6 +62,16 @@ interface ServerLibrary {
     /** Everything the account has starred, by type. */
     suspend fun starred(): ServerStarred
 
+    /**
+     * Stars or unstars one song.
+     *
+     * Unlike [starred] this is a write to the account, so it may throw for the
+     * usual reasons a server refuses one — no permission, no network, a song
+     * that is gone. Callers show the change first and roll it back if this
+     * fails.
+     */
+    suspend fun setSongStarred(songId: String, starred: Boolean)
+
     /** One artist with their albums and best-known tracks, or null if gone. */
     suspend fun artist(id: String): ServerArtistPage?
 
@@ -213,12 +223,12 @@ enum class ServerAlbumListType(val wire: String) {
  * What kind of page a server browse id names.
  *
  * [SERVER] is the library's own home page — a random selection plus the
- * newest releases and the artist list; the rest are the three pages a row can
- * open. Kept as an enum rather than a string so a typo is a compile error and
- * an id written by an older build fails to parse rather than opening the wrong
- * kind of page.
+ * newest releases and the artist list; the rest are the pages a row can open.
+ * Kept as an enum rather than a string so a typo is a compile error and an id
+ * written by an older build fails to parse rather than opening the wrong kind
+ * of page.
  */
-enum class ServerBrowseKind { SERVER, ARTIST, ALBUM, PLAYLIST, GENRE, DECADE }
+enum class ServerBrowseKind { SERVER, ARTIST, ALBUM, PLAYLIST, GENRE, DECADE, STARRED }
 
 /**
  * A parsed server browse id: which server, what kind of page, which row.

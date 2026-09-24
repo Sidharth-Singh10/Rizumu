@@ -1095,6 +1095,12 @@
 
     <string name="server_starred">Đã đánh dấu</string>
 
+    <string name="server_liked_songs">Bài hát đã thích</string>
+
+    <string name="server_unlike">Xóa khỏi bài hát đã thích</string>
+
+    <string name="server_liked_empty">Chưa có bài hát đã thích</string>
+
     <string name="server_new_playlist_description">Tạo một danh sách phát trên máy chủ này.</string>
 
     <string name="primary_library">Thư viện chính</string>

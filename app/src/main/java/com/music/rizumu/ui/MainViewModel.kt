@@ -13,6 +13,7 @@ import com.music.rizumu.auth.adjacentProfile
 import com.music.rizumu.data.AppUpdateChecker
 import com.music.rizumu.data.LocalMediaRepository
 import com.music.rizumu.data.LikeState
+import com.music.rizumu.data.ServerLikeState
 import com.music.rizumu.data.YtMusicRepository
 import com.music.rizumu.data.lyrics.EmbeddedLyrics
 import com.music.rizumu.data.lyrics.LyricLine
@@ -425,13 +426,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * them ([likeStatuses]) means a tap shows immediately without the library
      * having to be re-fetched, and a later refresh can't undo it.
      */
-    /** Every rating known for this account: the library's, then this session's. */
+    /**
+     * Every rating known for this account: the library's, this session's, and
+     * the stars this session has learned for server tracks.
+     *
+     * Server likes arrive in the same map because every surface asks the same
+     * question of it — what does this track's heart look like — and their ids
+     * (`src:…`) cannot collide with a YouTube video id.
+     */
     val likeStatuses: StateFlow<Map<String, LikeStatus>> =
-        combine(_library, LikeState.overrides) { library, overrides ->
+        combine(_library, LikeState.overrides, ServerLikeState.starred) { library, overrides, serverStars ->
             val liked = (library as? UiState.Success)?.data?.likedSongs
                 ?.associate { it.videoId to LikeStatus.LIKE }
                 .orEmpty()
-            liked + overrides
+            liked + overrides + serverStars.mapValues { (_, starred) ->
+                if (starred) LikeStatus.LIKE else LikeStatus.INDIFFERENT
+            }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     fun likeStatusOf(videoId: String): LikeStatus =
@@ -447,9 +457,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun setLike(videoId: String, status: LikeStatus) {
         // A source-backed track has no YouTube identity to rate — its id is
-        // `src:{config}::{id}` — so a rating would be a request about a song
-        // YouTube has never heard of. The surfaces that show a heart hide it
-        // for these tracks; this is the second half of that promise.
+        // `src:{config}::{id}` — so rating one would be a request about a song
+        // YouTube has never heard of. Server tracks get their own path
+        // instead; see [toggleServerLike].
         if (SourceRegistry.parseTrackKey(videoId) != null) return
         if (!requireSignIn()) return
         val previous = likeStatusOf(videoId)
@@ -530,11 +540,104 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The heart: liked becomes neutral, anything else becomes liked. */
-    fun toggleLike(videoId: String) = setLike(
-        videoId,
-        if (likeStatusOf(videoId) == LikeStatus.LIKE) LikeStatus.INDIFFERENT else LikeStatus.LIKE,
-    )
+    /**
+     * The heart: a YouTube track rates on YouTube, a server track stars on its
+     * own server — including one that is not primary, because the id carries
+     * the server it came from.
+     *
+     * Whether a track can be liked at all is the surfaces' separate question;
+     * see [canLikeServerTrack].
+     */
+    fun toggleLike(videoId: String) {
+        val source = SourceRegistry.parseTrackKey(videoId)
+        if (source != null) {
+            toggleServerLike(videoId, source)
+            return
+        }
+        setLike(
+            videoId,
+            if (likeStatusOf(videoId) == LikeStatus.LIKE) LikeStatus.INDIFFERENT else LikeStatus.LIKE,
+        )
+    }
+
+    /**
+     * Whether [videoId] names a track on a server that can record a star for
+     * it. The surfaces hide the heart for everything the app cannot like: a
+     * local file, a finished download, a catalogue with no such verb.
+     */
+    fun canLikeServerTrack(videoId: String): Boolean {
+        val (configId, _) = SourceRegistry.parseTrackKey(videoId) ?: return false
+        return SourceRegistry.instance(configId) is ServerLibrary
+    }
+
+    /**
+     * Stars or unstars a server track.
+     *
+     * Written to the screen first and rolled back if the server refuses, for
+     * the same reason [setLike] is: it is one tap on a track the user is
+     * looking at, and a control that waits on a round trip before it changes
+     * reads as a tap that missed. An unstar drops the track from whatever
+     * likes list is on screen — see [dropFromServerLikedLists] — and either
+     * way the server tabs are marked stale so the row and its count catch up
+     * on the next visit.
+     */
+    private fun toggleServerLike(videoId: String, source: Pair<String, String>) {
+        val (configId, songId) = source
+        val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return
+        val previous = ServerLikeState.isStarred(videoId)
+        val target = !previous
+        ServerLikeState.set(videoId, target)
+        viewModelScope.launch {
+            runCatching { library.setSongStarred(songId, target) }.fold(
+                onSuccess = {
+                    if (!target) dropFromServerLikedLists(videoId)
+                    invalidateServerPages()
+                },
+                onFailure = {
+                    ServerLikeState.set(videoId, previous)
+                },
+            )
+        }
+    }
+
+    /**
+     * As [dropFromLikedLists], for the server's collection: takes an unstarred
+     * track out of the Play tab's Liked songs row and out of the liked page
+     * itself, if either is on screen.
+     *
+     * The row is found by its `moreBrowseId` rather than its title — the title
+     * is translated, and the same track can sit in "Recently played" beside it,
+     * where unstarring is no reason to remove anything. Only ever removes; the
+     * next dashboard load places anything newly starred.
+     */
+    private fun dropFromServerLikedLists(videoId: String) {
+        val home = (_serverHome.value as? UiState.Success)?.data
+        if (home != null) {
+            var changed = false
+            val shelves = home.shelves.mapNotNull { shelf ->
+                if (!shelf.isLikedShelf()) return@mapNotNull shelf
+                val remaining = shelf.items.filterNot { it.videoId == videoId }
+                if (remaining.size == shelf.items.size) return@mapNotNull shelf
+                changed = true
+                remaining.takeIf { it.isNotEmpty() }?.let { shelf.copy(items = it) }
+            }
+            if (changed) _serverHome.value = UiState.Success(home.copy(shelves = shelves))
+        }
+        _detailStack.value = _detailStack.value.map { page ->
+            if (!page.isLikedPage()) return@map page
+            val songs = (page.songs as? UiState.Success)?.data ?: return@map page
+            if (songs.none { it.videoId == videoId }) return@map page
+            page.copy(songs = UiState.Success(songs.filterNot { it.videoId == videoId }))
+        }
+    }
+
+    /** Whether this shelf is the Play tab's Liked songs row. */
+    private fun HomeShelf.isLikedShelf(): Boolean =
+        moreBrowseId?.let(SourceRegistry::parseBrowseKey)?.kind == ServerBrowseKind.STARRED
+
+    /** Whether this page is the liked-songs collection. */
+    private fun DetailPage.isLikedPage(): Boolean =
+        SourceRegistry.parseBrowseKey(browseId)?.kind == ServerBrowseKind.STARRED
 
     /** As [toggleLike], for the thumb-down. */
     fun toggleDislike(videoId: String) = setLike(
@@ -1924,6 +2027,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** How many recently played tracks the Play tab shows. */
         const val SERVER_RECENT_TRACKS = 20
 
+        /** How many of the server's liked songs the Play tab's row holds. */
+        const val SERVER_LIKED_ROW = 20
+
         /** How many genres its discovery row holds. */
         const val SERVER_GENRE_ROW = 20
 
@@ -2168,6 +2274,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ServerBrowseKind.SERVER -> BrowseType.OTHER
                 ServerBrowseKind.GENRE -> BrowseType.OTHER
                 ServerBrowseKind.DECADE -> BrowseType.OTHER
+                ServerBrowseKind.STARRED -> BrowseType.OTHER
             },
         )
         viewModelScope.launch {
@@ -2281,6 +2388,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val songs = library.randomSongs(SERVER_DECADE_SONGS, fromYear = from, toYear = to)
                 ServerPageLoad(songs = songs.ifEmptyError())
             }
+
+            ServerBrowseKind.STARRED -> {
+                // The collection the Play tab's row abbreviates. Empty is a
+                // state of its own rather than a failure — a listener who has
+                // just unstarred the last song is looking straight at it — so
+                // it gets its own words instead of "no tracks here".
+                val songs = library.starred().songs
+                ServerPageLoad(
+                    songs = if (songs.isEmpty()) {
+                        UiState.Error(text(R.string.server_liked_empty))
+                    } else {
+                        UiState.Success(songs)
+                    },
+                    subtitle = songs.takeIf { it.isNotEmpty() }
+                        ?.let { text(R.string.card_songs_format, it.size) },
+                    artwork = songs.firstOrNull()?.thumbnailUrl,
+                )
+            }
         }
 
     /** The year range a decade id names, or null when it is malformed. */
@@ -2359,6 +2484,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Where a decade card's resolved cover is filed, and what its page opens. */
     private fun String.decadeBrowseKey(configId: String): String =
         SourceRegistry.browseKey(configId, ServerBrowseKind.DECADE, this)
+
+    /**
+     * One liked song, as a card on the Play tab. Carries a [videoId] so tapping
+     * it plays, exactly as a recently played card does.
+     */
+    private fun Song.toShelfItem() = ShelfItem(
+        title = title,
+        subtitle = artist,
+        thumbnailUrl = thumbnailUrl,
+        videoId = videoId,
+        browseId = null,
+    )
 
     /**
      * One recently played track. Carries a [videoId] rather than a browse id,
@@ -2477,18 +2614,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ── Primary-library screens ──────────────────────────────────────────
 
     /**
-     * The server the primary-library screens read from, if one is configured.
-     *
-     * The first enabled server in the stored order — which is the order the
-     * sources screen shows, so "first" is the user's own arrangement rather
-     * than a choice this makes for them.
-     */
-    private fun primaryServer(): SourceConfig? =
-        SourceRegistry.configs.value.firstOrNull {
-            it.kind == SourceKind.SUBSONIC && it.enabled && it.isComplete
-        }
-
-    /**
      * The Play tab when the server is the primary library.
      *
      * A dashboard of dynamic rows rather than a listing: the shuffle hero
@@ -2529,7 +2654,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * a no-op; a server edit changes the key and does reload.
      */
     fun onServerHomeShown() {
-        val config = primaryServer()
+        val config = SourceRegistry.primaryServer()
         if (config == null) {
             _serverHome.value = UiState.Loading
             serverHomeKey = null
@@ -2543,7 +2668,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Forces a reload — the Play tab's pull-to-refresh, and the error retry. */
     fun refreshServerHome() {
-        val config = primaryServer() ?: return
+        val config = SourceRegistry.primaryServer() ?: return
         if (serverHomeLoading) return
         loadServerHome(config, serverKey(config), showIndicator = true)
     }
@@ -2588,6 +2713,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         library: ServerLibrary,
     ): ServerHomePage {
         val shelves = mutableListOf<HomeShelf>()
+
+        // The listener's own collection, first: it is the one row that is what
+        // they made rather than what the server suggested. Hidden when empty,
+        // like the rows below it — the heart on any track is how it fills.
+        // The row shows the tracks themselves; the collection page it opens
+        // travels in `moreBrowseId`, so "Show all" opens the list, not a grid.
+        val starred = runCatching { library.starred() }.getOrDefault(ServerStarred())
+        if (starred.songs.isNotEmpty()) {
+            shelves += HomeShelf(
+                title = text(R.string.server_liked_songs),
+                items = starred.songs.take(SERVER_LIKED_ROW).map { it.toShelfItem() },
+                moreBrowseId = SourceRegistry.browseKey(config.id, ServerBrowseKind.STARRED),
+            )
+        }
 
         // Track-level recency, from this device's own history — the protocol
         // has no per-user recent-songs call, and this is the honest source for
@@ -2738,7 +2877,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * that may hold a hundred times as many tracks.
      */
     suspend fun shuffleAllSongs(): List<Song> {
-        val config = primaryServer() ?: return emptyList()
+        val config = SourceRegistry.primaryServer() ?: return emptyList()
         val library = SourceRegistry.instance(config.id) as? ServerLibrary ?: return emptyList()
         return runCatching { library.randomSongs(SERVER_SHUFFLE_SONGS) }.getOrDefault(emptyList())
     }
@@ -2772,7 +2911,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * it, either of which brings the next visit back here to reload.
      */
     fun onServerLibraryShown() {
-        val config = primaryServer()
+        val config = SourceRegistry.primaryServer()
         if (config == null) {
             _serverLibrary.value = UiState.Error(text(R.string.server_home_empty))
             serverLibraryKey = null
@@ -2786,7 +2925,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Forces a reload — the pull-to-refresh, and the error state's retry. */
     fun refreshServerLibrary() {
-        val config = primaryServer()
+        val config = SourceRegistry.primaryServer()
         if (config == null) {
             _serverLibrary.value = UiState.Error(text(R.string.server_home_empty))
             return
@@ -2907,6 +3046,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ServerBrowseKind.DECADE -> decadeYears(ref.id)
                 ?.let { (from, to) -> library.randomSongs(SERVER_DECADE_SONGS, from, to) }
                 .orEmpty()
+            ServerBrowseKind.STARRED -> library.starred().songs
         }
     }
 

@@ -1462,6 +1462,29 @@ private fun RizumuApp(
     }
 
     /**
+     * A server shelf's "Show all".
+     *
+     * Most shelves preview their own cards, so this opens the grid the YouTube
+     * feeds use. The Liked songs row is the exception: its cards are tracks, and
+     * its "Show all" is the collection page itself, which it names in
+     * `moreBrowseId` — a grid of track cards would make every tap a
+     * single-track play instead of a list of the collection.
+     */
+    val serverShowAll: (HomeShelf) -> Unit = { shelf ->
+        val more = shelf.moreBrowseId
+        if (more != null && SourceRegistry.parseBrowseKey(more) != null) {
+            viewModel.openDetail(
+                browseId = more,
+                title = shelf.title,
+                subtitle = shelf.subtitle,
+                thumbnailUrl = shelf.items.firstOrNull()?.thumbnailUrl,
+            )
+        } else {
+            libraryShowAll = shelf
+        }
+    }
+
+    /**
      * Hands [action] the target's whole track list.
      *
      * A card has no tracks behind it — its page was never opened — so the
@@ -1897,7 +1920,14 @@ private fun RizumuApp(
             repeatMode = player.repeatMode,
             shuffleEnabled = shuffleEnabled,
             autoplayEnabled = autoplay,
-            signedIn = signedIn,
+            // The heart appears where a like can actually be written: a
+            // signed-in YouTube track, or a track from a server that can star
+            // it. A file on disk has no identity to write against either way.
+            canLike = displayedSong.localUri == null &&
+                (
+                    viewModel.canLikeServerTrack(displayedSong.videoId) ||
+                        (signedIn && SourceRegistry.parseTrackKey(displayedSong.videoId) == null)
+                ),
             likeStatus = likeStatuses[song.videoId] ?: LikeStatus.INDIFFERENT,
             onToggleLike = { viewModel.toggleLike(song.videoId) },
             // The service owns both the queue and the Shuffle state. Keeping
@@ -2578,7 +2608,7 @@ private fun RizumuApp(
                                     },
                                     onItemClick = serverCardClick,
                                     onItemLongPress = onShelfLongPress,
-                                    onShowAll = { shelf -> libraryShowAll = shelf },
+                                    onShowAll = serverShowAll,
                                     contentPadding = listPadding,
                                 )
                             }
@@ -2745,7 +2775,7 @@ private fun RizumuApp(
                                     }
                                 },
                                 onItemLongPress = onBrowseLongPress,
-                                onShowAll = { shelf -> libraryShowAll = shelf },
+                                onShowAll = serverShowAll,
                                 refreshing = serverLibraryRefreshing,
                                 pullState = serverLibraryPull,
                                 onRefresh = viewModel::refreshServerLibrary,
@@ -3213,9 +3243,11 @@ private fun RizumuApp(
             ) {
                 SongActionsSheet(
                     song = song,
-                    // No Google account surface in server mode: the rating and
-                    // playlist rows are the account's, so they are not offered.
+                    // YouTube's account rows are hidden in server mode: there
+                    // is no Google account surface there to write to. A server
+                    // track still gets its own rows — see serverBacked.
                     signedIn = signedIn && !serverMode,
+                    serverBacked = viewModel.canLikeServerTrack(song.videoId),
                     likeStatus = likeStatuses[song.videoId] ?: LikeStatus.INDIFFERENT,
                     onPlayNext = { playNext(song); songActions = null },
                     onAddToQueue = { addToQueue(song); songActions = null },

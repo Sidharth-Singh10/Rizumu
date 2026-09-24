@@ -77,6 +77,7 @@ import java.util.concurrent.ConcurrentHashMap
 import com.music.rizumu.data.Http
 import com.music.rizumu.data.LikeState
 import com.music.rizumu.data.NerdStats
+import com.music.rizumu.data.ServerLikeState
 import com.music.rizumu.data.TrackLog
 import com.music.rizumu.data.discord.DiscordRPC
 import com.music.rizumu.data.innertube.PlaybackTracker
@@ -91,6 +92,8 @@ import com.music.rizumu.data.scrobbling.ScrobbleManager
 import com.music.rizumu.data.settings.AppSettings
 import com.music.rizumu.data.settings.EqualizerMode
 import com.music.rizumu.data.settings.OutputPcmMode
+import com.music.rizumu.data.settings.PrimaryLibrary
+import com.music.rizumu.data.sources.ServerLibrary
 import com.music.rizumu.data.sources.SourceResolver
 import com.music.rizumu.data.sources.SourceStream
 import com.music.rizumu.data.sources.StreamFormat
@@ -296,6 +299,62 @@ class PlaybackService : MediaLibraryService() {
         }
         songs
     }
+
+    /**
+     * [ServerLibrary.starred] for Android Auto's Liked songs folder, when the
+     * server is the primary library.
+     *
+     * The same shape as [cachedLikedSongs] and for the same reason: Auto
+     * re-runs `onGetChildren` every time the folder is opened, and one glance
+     * should not pay for a full starred fetch on a library that holds
+     * thousands of songs.
+     */
+    private var cachedServerLiked: Pair<Long, List<Song>>? = null
+    private var cachedServerLikedKey: String? = null
+    private val serverLikedMutex = Mutex()
+    private val SERVER_LIKED_CACHE_TTL_MS = 60_000L
+
+    private suspend fun cachedServerLikedSongs(): List<Song> = serverLikedMutex.withLock {
+        val server = SourceRegistry.primaryServer()
+        if (server == null) {
+            cachedServerLiked = null
+            cachedServerLikedKey = null
+            return emptyList()
+        }
+        if (cachedServerLikedKey != null && cachedServerLikedKey != server.id) {
+            cachedServerLiked = null
+        }
+        cachedServerLiked?.let { (at, songs) ->
+            if (SystemClock.elapsedRealtime() - at < SERVER_LIKED_CACHE_TTL_MS && songs.isNotEmpty()) return songs
+        }
+        val songs = try {
+            withTimeoutOrNull(4000L) {
+                (SourceRegistry.instance(server.id) as? ServerLibrary)?.starred()?.songs
+            } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        if (songs.isNotEmpty()) {
+            cachedServerLiked = SystemClock.elapsedRealtime() to songs
+            cachedServerLikedKey = server.id
+            songs.forEach { songCache[it.videoId] = it }
+            ServerLikeState.seedStarred(songs.mapTo(HashSet()) { it.videoId })
+        }
+        songs
+    }
+
+    private fun snapshotServerLiked(): List<Song> {
+        val server = SourceRegistry.primaryServer()
+        return if (server != null && server.id == cachedServerLikedKey) {
+            cachedServerLiked?.second.orEmpty()
+        } else {
+            emptyList()
+        }
+    }
+
+    private fun isServerLikedFresh(): Boolean =
+        snapshotServerLiked().isNotEmpty() &&
+            cachedServerLiked?.let { (at, _) -> isFresh(at, SERVER_LIKED_CACHE_TTL_MS) } == true
 
     private var cachedHome: Pair<Long, com.music.rizumu.data.model.HomeFeed>? = null
     private val homeMutex = Mutex()
@@ -1452,19 +1511,21 @@ class PlaybackService : MediaLibraryService() {
                     .setDisplayName(getString(R.string.revert_to_original))
                     .build()
             }
-        // A track from a configured source has no YouTube identity to rate, so
-        // the notification simply does not offer the heart for one — the same
-        // rule the player's own surfaces apply. See [toggleFavoriteFromNotification]
-        // for the other half of the promise.
+        // The heart goes wherever the track's like belongs: YouTube for a
+        // YouTube track, the track's own server for a `src:` one. A catalogue
+        // with no such verb — a local file, a finished download — gets none.
+        // See [toggleFavoriteFromNotification] for the other half.
         val favorite = current
-            ?.takeIf { SourceRegistry.parseTrackKey(it.videoId) == null }
+            ?.takeIf { canToggleFavorite(it.videoId) }
             ?.let {
+                val mediaId = player?.currentMediaItem?.mediaId
+                val liked = if (SourceRegistry.parseTrackKey(it.videoId) != null) {
+                    ServerLikeState.isStarred(it.videoId)
+                } else {
+                    LikeState.overrides.value[mediaId] == LikeStatus.LIKE
+                }
                 CommandButton.Builder(
-                    if (LikeState.overrides.value[player?.currentMediaItem?.mediaId] == LikeStatus.LIKE) {
-                        CommandButton.ICON_HEART_FILLED
-                    } else {
-                        CommandButton.ICON_HEART_UNFILLED
-                    },
+                    if (liked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED,
                 )
                     .setSessionCommand(favoriteCommand)
                     .setDisplayName("Favorite")
@@ -1749,12 +1810,18 @@ class PlaybackService : MediaLibraryService() {
         exoPlayer.addMediaItems(restored)
     }
 
+    /** Whether the notification's heart can act on [videoId]. */
+    private fun canToggleFavorite(videoId: String): Boolean =
+        SourceRegistry.parseTrackKey(videoId)?.let { (configId, _) ->
+            SourceRegistry.instance(configId) is ServerLibrary
+        } ?: true
+
     private fun toggleFavoriteFromNotification(videoId: String) {
-        // The notification's heart is not offered for a source-backed track —
-        // see [notificationButtons] — and this is the guard behind that: an
-        // id shaped `src:{config}::{id}` names a song YouTube has never heard
-        // of, and rating it would fail at best.
-        if (SourceRegistry.parseTrackKey(videoId) != null) return
+        val source = SourceRegistry.parseTrackKey(videoId)
+        if (source != null) {
+            toggleServerFavorite(videoId, source)
+            return
+        }
 
         favoriteActionJob?.cancel()
         val previous = LikeState.overrides.value[videoId] ?: LikeStatus.INDIFFERENT
@@ -1774,6 +1841,29 @@ class PlaybackService : MediaLibraryService() {
                     LikeState.set(videoId, previous)
                     mediaSession?.setCustomLayout(notificationButtons())
                     TrackLog.w("Rizumu", "notification favorite failed: ${it.message}", about = videoId)
+                }
+        }
+    }
+
+    /**
+     * The notification's heart on a server track: the star is written to the
+     * track's own server, and the optimistic flip is rolled back if it is
+     * refused — the same bargain the YouTube path above makes.
+     */
+    private fun toggleServerFavorite(videoId: String, source: Pair<String, String>) {
+        val (configId, songId) = source
+        val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return
+        favoriteActionJob?.cancel()
+        val previous = ServerLikeState.isStarred(videoId)
+        val target = !previous
+        ServerLikeState.set(videoId, target)
+        mediaSession?.setCustomLayout(notificationButtons())
+        favoriteActionJob = scope.launch {
+            runCatching { library.setSongStarred(songId, target) }
+                .onFailure {
+                    ServerLikeState.set(videoId, previous)
+                    mediaSession?.setCustomLayout(notificationButtons())
+                    TrackLog.w("Rizumu", "notification star failed: ${it.message}", about = videoId)
                 }
         }
     }
@@ -5334,7 +5424,29 @@ class PlaybackService : MediaLibraryService() {
                     )
                 }
                 MEDIA_LIKED_ID -> {
-                    if (com.music.rizumu.data.innertube.Innertube.cookie == null) {
+                    // "Liked songs" means what the primary library says it
+                    // means: the server's stars when the server is the chosen
+                    // library, YouTube's Liked Music otherwise. The per-track
+                    // heart routes the same way — see
+                    // [toggleFavoriteFromNotification] — so the folder and the
+                    // button never disagree about where a like goes.
+                    val serverPrimary = SourceRegistry.primaryServer() != null &&
+                        AppSettings.primaryLibrary.value == PrimaryLibrary.SERVER
+                    if (serverPrimary) {
+                        val snapshot = snapshotServerLiked()
+                        val songs = if (snapshot.isNotEmpty()) {
+                            if (!isServerLikedFresh()) {
+                                refreshFolderInBackground(session, browser, parentId, params) {
+                                    cachedServerLikedSongs().size
+                                }
+                            }
+                            snapshot
+                        } else {
+                            cachedServerLikedSongs()
+                        }
+                        songs.forEach { songCache[it.videoId] = it }
+                        if (songs.isNotEmpty()) songs.map { it.toMediaItem() } else emptyLikedItems()
+                    } else if (com.music.rizumu.data.innertube.Innertube.cookie == null) {
                         listOf(createLoginPromptItem())
                     } else {
                         val snapshot = snapshotLiked()
@@ -5349,17 +5461,7 @@ class PlaybackService : MediaLibraryService() {
                             cachedLikedSongs()
                         }
                         songs.forEach { songCache[it.videoId] = it }
-                        if (songs.isNotEmpty()) {
-                            songs.map { it.toMediaItem() }
-                        } else {
-                            listOf(
-                                createInfoItem(
-                                    "msg:empty_liked",
-                                    getString(R.string.auto_empty_liked_title),
-                                    getString(R.string.auto_empty_liked_subtitle),
-                                ),
-                            )
-                        }
+                        if (songs.isNotEmpty()) songs.map { it.toMediaItem() } else emptyLikedItems()
                     }
                 }
                 MEDIA_DOWNLOADS_ID -> {
@@ -5948,6 +6050,18 @@ class PlaybackService : MediaLibraryService() {
             thumbnailUrl = thumbnailUrl,
         )
     }
+
+    /**
+     * What the Liked songs folder holds when there is nothing in it — from
+     * either library, so the wording is the same either way.
+     */
+    private fun emptyLikedItems(): List<MediaItem> = listOf(
+        createInfoItem(
+            "msg:empty_liked",
+            getString(R.string.auto_empty_liked_title),
+            getString(R.string.auto_empty_liked_subtitle),
+        ),
+    )
 
     private fun createLoginPromptItem(): MediaItem =
         MediaItem.Builder()

@@ -207,6 +207,21 @@ object SourceRegistry {
 
     fun config(configId: String): SourceConfig? = configs.value.firstOrNull { it.id == configId }
 
+    /**
+     * The server the primary-library screens read from, if one is configured.
+     *
+     * The first enabled server in the stored order — which is the order the
+     * sources screen shows, so "first" is the user's own arrangement rather
+     * than a choice this makes for them. Shared rather than re-derived because
+     * the playback service needs the same server's liked songs for Android
+     * Auto, and two answers to "which server" would be two different
+     * collections.
+     */
+    fun primaryServer(): SourceConfig? =
+        configs.value.firstOrNull {
+            it.kind == SourceKind.SUBSONIC && it.enabled && it.isComplete
+        }
+
     // ── Editing ─────────────────────────────────────────────────────────
 
     fun add(config: SourceConfig) = publish(configs.value + config.tidied())

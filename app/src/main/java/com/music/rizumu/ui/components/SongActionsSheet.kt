@@ -95,11 +95,12 @@ import java.util.Locale
  * always the fallback for "I meant to do something with this song".
  *
  * Everything that writes to the account is hidden outright when [signedIn] is
- * false rather than shown and refused. The same goes for a track that is
- * playing from a local file or a finished download (`song.localUri != null`):
- * rating, playlists, downloading it again and sharing all assume a YouTube
- * identity the file doesn't carry, so those rows drop out regardless of
- * [signedIn].
+ * false rather than shown and refused. A track from a configured server is the
+ * exception: it is offered the heart and the playlist rows even with no
+ * account, because those write to its own server — see [serverBacked]. A track
+ * playing from a local file or a finished download (`song.localUri != null`)
+ * is offered no rating at all: a file has no identity to write one against.
+ * Those rows drop out regardless of [signedIn].
  *
  * [showSleepTimer] and [onShare] are the player's extras: a sleep timer isn't a
  * property of some row in a list, so it only appears where it means something.
@@ -119,6 +120,12 @@ import java.util.Locale
 fun SongActionsSheet(
     song: Song,
     signedIn: Boolean,
+    /**
+     * Whether this track comes from a source that can record a star for it —
+     * a configured server. Such a track is offered the heart and the playlist
+     * rows without a Google account, because those write to its own server.
+     */
+    serverBacked: Boolean,
     likeStatus: LikeStatus,
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
@@ -223,25 +230,35 @@ fun SongActionsSheet(
             )
         }
 
-        // A source-backed track has no YouTube identity to rate — its id names
-        // a song YouTube has never heard of — so the sheet does not offer the
-        // rating actions for one. The player surfaces hide the same heart for
-        // the same reason; see NowPlayingScreen.
-        if (signedIn && !isOffline && SourceRegistry.parseTrackKey(song.videoId) == null) {
+        // Which likes this track can carry is two questions with different
+        // answers. A YouTube track rates on YouTube, so it needs the account —
+        // and, being a stream rather than a file, the network. A server track
+        // stars on its own server, so it needs no Google account at all; only
+        // a file on disk can record neither, and it is excluded for both.
+        val youtubeRated = signedIn && !isOffline && SourceRegistry.parseTrackKey(song.videoId) == null
+        val serverRated = serverBacked && !isOffline
+        if (youtubeRated || serverRated) {
             ActionRow(
                 icon = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                label = if (liked) stringResource(R.string.remove_from_liked) else stringResource(R.string.like),
+                label = when {
+                    !liked -> stringResource(R.string.like)
+                    youtubeRated -> stringResource(R.string.remove_from_liked)
+                    else -> stringResource(R.string.server_unlike)
+                },
                 tint = if (liked) palette.accent else null,
                 accent = palette.accent,
                 onClick = onToggleLike,
             )
-            ActionRow(
-                icon = if (disliked) Icons.Rounded.ThumbDown else Icons.Rounded.ThumbDownOffAlt,
-                label = if (disliked) stringResource(R.string.undo_dislike) else stringResource(R.string.dislike),
-                tint = if (disliked) palette.accent else null,
-                accent = palette.accent,
-                onClick = onToggleDislike,
-            )
+            // A thumb-down has no server-side meaning, so it stays YouTube's.
+            if (youtubeRated) {
+                ActionRow(
+                    icon = if (disliked) Icons.Rounded.ThumbDown else Icons.Rounded.ThumbDownOffAlt,
+                    label = if (disliked) stringResource(R.string.undo_dislike) else stringResource(R.string.dislike),
+                    tint = if (disliked) palette.accent else null,
+                    accent = palette.accent,
+                    onClick = onToggleDislike,
+                )
+            }
             onAddToPlaylist?.let { add ->
                 ActionRow(
                     icon = Icons.AutoMirrored.Rounded.PlaylistAdd,

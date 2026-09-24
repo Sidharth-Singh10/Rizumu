@@ -228,7 +228,6 @@ import com.music.rizumu.data.NerdStats
 import com.music.rizumu.data.listentogether.ListenTogether
 import com.music.rizumu.data.listentogether.PartyMember
 import com.music.rizumu.data.settings.TrackAnalysisState
-import com.music.rizumu.data.sources.SourceRegistry
 import com.music.rizumu.data.canvas.CanvasArtwork
 import com.music.rizumu.data.canvas.CanvasRepository
 import com.music.rizumu.data.lyrics.CharGrowth
@@ -958,7 +957,7 @@ fun NowPlayingScreen(
     repeatMode: Int,
     shuffleEnabled: Boolean,
     autoplayEnabled: Boolean,
-    signedIn: Boolean,
+    canLike: Boolean,
     accountName: String?,
     likeStatus: LikeStatus,
     onToggleLike: () -> Unit,
@@ -1991,7 +1990,7 @@ fun NowPlayingScreen(
             repeatMode = repeatMode,
             shuffleEnabled = shuffleEnabled,
             autoplayEnabled = autoplayEnabled,
-            signedIn = signedIn,
+            canLike = canLike,
             accountName = accountName,
             likeStatus = likeStatus,
             hideVolumeBar = hideVolumeBar,
@@ -2932,12 +2931,11 @@ fun NowPlayingScreen(
                     Spacer(Modifier.width(10.dp))
                     // Beside the credits rather than down in the toggle row:
                     // liking is about *this song*, and the row below is about
-                    // how the queue plays. Guests get nothing to tap, since
-                    // there's no account to record it against — and neither
-                    // does a local file, a finished download, or a track from
-                    // a configured source: none of them carries a YouTube
-                    // identity to rate.
-                    if (signedIn && song.localUri == null && SourceRegistry.parseTrackKey(song.videoId) == null) {
+                    // how the queue plays. Whether there is anything to tap is
+                    // the host's call — a guest, a local file, a finished
+                    // download and a catalogue with no like verb all arrive
+                    // here as canLike = false; see MainActivity.
+                    if (canLike) {
                         val liked = likeStatus == LikeStatus.LIKE
                         CircleGlyph(
                             icon = if (liked) RizumuIcons.HeartFilled else RizumuIcons.Heart,
@@ -3612,7 +3610,7 @@ private fun WidePlayerControls(
     repeatMode: Int,
     shuffleEnabled: Boolean,
     autoplayEnabled: Boolean,
-    signedIn: Boolean,
+    canLike: Boolean,
     /** For the output caption's "<name>'s Phone" — see [OutputCaption]. */
     accountName: String?,
     likeStatus: LikeStatus,
@@ -4063,7 +4061,7 @@ private fun WidePlayerControls(
                     Spacer(Modifier.height(20.dp))
                     WideCredits(
                         song = song,
-                        signedIn = signedIn,
+                        canLike = canLike,
                         likeStatus = likeStatus,
                         onToggleLike = onToggleLike,
                         onOpenMenu = onOpenMenu,
@@ -4169,7 +4167,7 @@ private fun WideArtwork(song: Song, scale: Float, modifier: Modifier = Modifier)
 @Composable
 private fun WideCredits(
     song: Song,
-    signedIn: Boolean,
+    canLike: Boolean,
     likeStatus: LikeStatus,
     onToggleLike: () -> Unit,
     onOpenMenu: () -> Unit,
@@ -4204,10 +4202,9 @@ private fun WideCredits(
             )
         }
         Spacer(Modifier.width(10.dp))
-        // Same gate as the phone player's: no account to like against for a
-        // guest, and no YouTube identity to rate a local file, a finished
-        // download, or a track from a configured source against either.
-        if (signedIn && song.localUri == null && SourceRegistry.parseTrackKey(song.videoId) == null) {
+        // Same gate as the phone player's: the host decides whether this track
+        // has anywhere to record a like — see MainActivity's canLike.
+        if (canLike) {
             val liked = likeStatus == LikeStatus.LIKE
             CircleGlyph(
                 icon = if (liked) RizumuIcons.HeartFilled else RizumuIcons.Heart,

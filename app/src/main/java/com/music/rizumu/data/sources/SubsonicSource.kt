@@ -1,5 +1,6 @@
 package com.music.rizumu.data.sources
 
+import com.music.rizumu.data.ServerLikeState
 import com.music.rizumu.data.TrackLog
 import com.music.rizumu.data.lyrics.LyricLine
 import com.music.rizumu.data.model.Song
@@ -183,6 +184,10 @@ class SubsonicSource(
         )
     }
 
+    override suspend fun setSongStarred(songId: String, starred: Boolean) = withContext(Dispatchers.IO) {
+        client.setSongStarred(songId, starred)
+    }
+
     override suspend fun artist(id: String): ServerArtistPage? = withContext(Dispatchers.IO) {
         val artist = try {
             client.artist(id)
@@ -346,9 +351,21 @@ class SubsonicSource(
      * playlists — so a track played from an album page has the same duration
      * and codec available to its stream as one played from search.
      */
-    private fun List<SubsonicSong>.toSongs(): List<Song> = map { song ->
-        rows[song.id] = song
-        song.toSong()
+    private fun List<SubsonicSong>.toSongs(): List<Song> {
+        // A row the server answers with carries its own star timestamp, so
+        // opening any list — an album, a playlist, a genre, search — keeps the
+        // likes this session knows about current without a separate starred
+        // fetch to paint a heart. Absent means "not starred", so only starred
+        // rows are seeded; a session unstar is never overwritten.
+        ServerLikeState.seedStarred(
+            mapNotNull { song ->
+                song.takeIf { it.starred != null }?.let { SourceRegistry.trackKey(config.id, it.id) }
+            },
+        )
+        return map { song ->
+            rows[song.id] = song
+            song.toSong()
+        }
     }
 
     private fun SubsonicArtist.toServerArtist() = ServerArtist(

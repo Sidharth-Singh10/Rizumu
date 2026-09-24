@@ -312,6 +312,22 @@ class SubsonicClientTest {
     }
 
     @Test
+    fun `star and unstar name the song`() = runBlocking {
+        responder = { ok() }
+        val client = client()
+        client.setSongStarred("300", starred = true)
+        client.setSongStarred("300", starred = false)
+
+        val star = seen[0]
+        assertEquals("/rest/star", pathOf(star))
+        assertEquals("300", query(star, "id"))
+
+        val unstar = seen[1]
+        assertEquals("/rest/unstar", pathOf(unstar))
+        assertEquals("300", query(unstar, "id"))
+    }
+
+    @Test
     fun `getRandomSongs sends the size and an optional year range`() = runBlocking {
         responder = {
             ok(""","randomSongs":{"song":[{"id":"300","title":"Teardrop","duration":330}]}""")
