@@ -140,6 +140,14 @@ object LastPlayed {
         val path: String? = null,
         val duration: String? = null,
         val album: String? = null,
+        /**
+         * The server metadata a `src:` track carries. Nullable and defaulted
+         * so a queue written by an older build still decodes, and the live
+         * MediaItem round trip is not the only path that keeps them.
+         */
+        val albumId: String? = null,
+        val artistId: String? = null,
+        val genre: String? = null,
         val explicit: Boolean? = null,
         val video: Boolean = false,
         val radio: String? = null,
@@ -154,6 +162,9 @@ object LastPlayed {
             thumbnailUrl = artwork,
             durationText = duration,
             albumName = album,
+            albumId = albumId,
+            artistId = artistId,
+            genre = genre,
             isExplicit = explicit,
             isVideo = video,
             fromAutoplay = auto,
@@ -178,6 +189,9 @@ object LastPlayed {
                 path = song.localPath,
                 duration = song.durationText,
                 album = song.albumName,
+                albumId = song.albumId,
+                artistId = song.artistId,
+                genre = song.genre,
                 explicit = song.isExplicit,
                 video = song.isVideo,
                 radio = song.radioName,

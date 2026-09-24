@@ -513,8 +513,14 @@ object ListeningStats {
         }
     }
 
-    /** Several months added together, on the way to a [ReplaySummary]. */
-    private class MergedBucket {
+    /**
+     * Several months added together, on the way to a [ReplaySummary].
+     *
+     * Internal rather than private so the Replay reconstruction path — which
+     * is where a dropped genre would hide — can be tested without a device's
+     * history behind it.
+     */
+    internal class MergedBucket {
         val tracks = HashMap<String, TrackEntry>()
         val artists = HashMap<String, NameEntry>()
         val albums = HashMap<String, NameEntry>()
@@ -555,6 +561,11 @@ object ListeningStats {
                             artistId = it.artistId,
                             albumId = it.albumId,
                             albumName = it.album,
+                            // Carried so a track played from the Replay charts
+                            // records its next play with the same tag — without
+                            // it the genre-affinity ranking loses every play
+                            // made from this page.
+                            genre = it.genre,
                         ),
                         ms = it.ms,
                         plays = it.plays,
