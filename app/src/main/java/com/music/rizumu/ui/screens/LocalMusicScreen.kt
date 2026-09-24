@@ -110,6 +110,7 @@ import com.music.rizumu.ui.components.topBarHeight
 import com.music.rizumu.ui.haptics.Haptic
 import com.music.rizumu.ui.haptics.rememberHaptics
 import com.music.rizumu.ui.icons.RizumuIcons
+import com.music.rizumu.ui.theme.AccentRed
 import java.util.Locale
 
 private const val LOCAL_TAB_SONGS = 0
@@ -135,7 +136,17 @@ fun LocalMusicScreen(
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onSongSwipe: (Song) -> Unit,
-    onShuffle: (List<Song>) -> Unit,
+    /**
+     * Toggles shuffle for the queue that will start from this page. It does not
+     * start playing: the listener picks a track, or presses Play.
+     */
+    onShuffle: () -> Unit,
+    /**
+     * Whether the mode [onShuffle] toggles is on — the shuffle circle on a
+     * drill-down page is lit while it is, the same as the player's glyph and
+     * the release pages' circles.
+     */
+    shuffleEnabled: Boolean = false,
     contentPadding: PaddingValues,
     /**
      * Shown in place of the tab content when there are no songs at all — the
@@ -389,6 +400,7 @@ fun LocalMusicScreen(
                         onSongMore = onSongLongPress,
                         onSongSwipe = onSongSwipe,
                         onShuffle = onShuffle,
+                        shuffleEnabled = shuffleEnabled,
                         onMore = onCollectionLongPress?.let { more ->
                             { more(drillDownLabel ?: "", drillDownSongs) }
                         },
@@ -1259,7 +1271,11 @@ private fun DrillDownHeader(
 private fun DrillDownActionRow(
     songs: List<Song>,
     onSongClick: (List<Song>, Int) -> Unit,
-    onShuffle: (List<Song>) -> Unit,
+    onShuffle: () -> Unit,
+    /** Lit while the mode this circle toggles is on. The local pages have no
+     * artwork palette to take a colour from, so the app's retained red is the
+     * accent here — the one hue that reads in both themes. */
+    shuffleEnabled: Boolean = false,
 ) {
     Row(
         modifier = Modifier
@@ -1274,13 +1290,21 @@ private fun DrillDownActionRow(
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
                 .border(0.5.dp, Color.White.copy(alpha = 0.10f), CircleShape)
-                .clickable { if (songs.isNotEmpty()) onShuffle(songs) },
+                .clickable { onShuffle() },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 RizumuIcons.Shuffle,
-                contentDescription = stringResource(R.string.shuffle),
-                tint = if (isSystemInDarkTheme()) Color.White else Color.Black,
+                contentDescription = stringResource(
+                    if (shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off,
+                ),
+                tint = if (shuffleEnabled) {
+                    AccentRed
+                } else if (isSystemInDarkTheme()) {
+                    Color.White
+                } else {
+                    Color.Black
+                },
                 modifier = Modifier.size(18.dp),
             )
         }
@@ -1327,7 +1351,9 @@ private fun DrillDownSongList(
     /** The row's ⋮, where holding it does something else — see [SongRow]. */
     onSongMore: ((Song) -> Unit)? = null,
     onSongSwipe: (Song) -> Unit,
-    onShuffle: (List<Song>) -> Unit,
+    onShuffle: () -> Unit,
+    /** Whether the mode this page's shuffle circle toggles is already on. */
+    shuffleEnabled: Boolean = false,
     /** The ⋮ in the header, acting on the whole artist or album. */
     onMore: (() -> Unit)?,
     onBack: () -> Unit,
@@ -1362,6 +1388,7 @@ private fun DrillDownSongList(
                     songs = songs,
                     onSongClick = onSongClick,
                     onShuffle = onShuffle,
+                    shuffleEnabled = shuffleEnabled,
                 )
             }
             itemsIndexed(songs) { index, song ->
@@ -1395,6 +1422,7 @@ private fun DrillDownSongList(
                     songs = songs,
                     onSongClick = onSongClick,
                     onShuffle = onShuffle,
+                    shuffleEnabled = shuffleEnabled,
                 )
             }
             itemsIndexed(songs) { index, song ->

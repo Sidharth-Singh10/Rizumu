@@ -202,7 +202,18 @@ fun DetailScreen(
     onSongClick: (List<Song>, Int) -> Unit,
     onSongLongPress: (Song) -> Unit,
     onSongSwipe: (Song) -> Unit,
-    onShuffle: (List<Song>) -> Unit,
+    /**
+     * Toggles shuffle for the queue that will start from this page. It does not
+     * start playing: the listener picks the track, or presses Play, and the
+     * queue is built shuffled from there.
+     */
+    onShuffle: () -> Unit,
+    /**
+     * Whether the mode [onShuffle] toggles is on. The circle's glyph takes the
+     * artwork's accent while it is, the same colour the player's shuffle glyph
+     * uses.
+     */
+    shuffleEnabled: Boolean = false,
     onSectionItemClick: (ShelfItem) -> Unit,
     onArtistClick: (String, String) -> Unit,
     onAddSuggested: (Song) -> Unit,
@@ -399,7 +410,8 @@ fun DetailScreen(
                         trackCount = songs.size,
                         songs = songs,
                         onPlay = { onSongClick(songs, 0) },
-                        onShuffle = { onShuffle(songs) },
+                        onShuffle = onShuffle,
+                        shuffleEnabled = shuffleEnabled,
                         searching = searching,
                         onSearch = {
                             if (searching) {
@@ -445,7 +457,8 @@ fun DetailScreen(
                     ActionRow(
                         palette = palette,
                         onPlay = { onSongClick(songs, 0) },
-                        onShuffle = { onShuffle(songs) },
+                        onShuffle = onShuffle,
+                        shuffleEnabled = shuffleEnabled,
                         subscription = page.subscription?.takeIf { onToggleSubscription != null },
                         onToggleSubscription = onToggleSubscription,
                         // Halved when an About section follows directly — see
@@ -637,6 +650,8 @@ private fun ReleaseHeader(
     songs: List<Song>,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
+    /** Whether the mode this page's shuffle circle turns on is already on. */
+    shuffleEnabled: Boolean,
     searching: Boolean,
     onSearch: () -> Unit,
     onMore: ((List<Song>) -> Unit)?,
@@ -752,11 +767,16 @@ private fun ReleaseHeader(
                     }
                     CircleIconButton(
                         icon = RizumuIcons.Shuffle,
-                        contentDescription = stringResource(R.string.shuffle),
+                        contentDescription = stringResource(
+                            if (shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off,
+                        ),
                         palette = palette,
                         onClick = onShuffle,
-                        haptic = Haptic.Resume,
+                        // It is a switch, not a way to start playing, so it
+                        // buzzes like one.
+                        haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
                         size = circleSize,
+                        active = shuffleEnabled,
                     )
                     PlayPill(
                         palette = palette,
@@ -1167,6 +1187,8 @@ private fun ActionRow(
     palette: ArtworkPalette,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
+    /** Whether the mode this row's shuffle circle turns on is already on. */
+    shuffleEnabled: Boolean = false,
     bottomSpace: Dp = 22.dp,
     /** The artist header's subscribe state, or null where it isn't offered. */
     subscription: SubscriptionState? = null,
@@ -1198,13 +1220,16 @@ private fun ActionRow(
             onClick = onPlay,
         )
 
-        // Circular Shuffle button
+        // Circular Shuffle button — a mode switch, lit while the mode is on.
         CircleIconButton(
             icon = RizumuIcons.Shuffle,
-            contentDescription = stringResource(R.string.shuffle),
+            contentDescription = stringResource(
+                if (shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off,
+            ),
             palette = palette,
             onClick = onShuffle,
-            haptic = Haptic.Resume,
+            haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+            active = shuffleEnabled,
         )
     }
     Spacer(Modifier.height(bottomSpace))
@@ -1256,6 +1281,11 @@ private fun PlayPill(
 /**
  * Small circular icon-only button — used for Shuffle and Download flanking the
  * Play pill. Translucent glassy fill, accent-coloured icon.
+ *
+ * [active] is for a circle that names a mode rather than only an action: the
+ * glyph takes the artwork's own accent, which is contrast-corrected against
+ * this page, while the glass fill stays as it is. Colour on the icon, not a
+ * filled button — the shape of the row never changes when a mode is on.
  */
 @Composable
 private fun CircleIconButton(
@@ -1265,6 +1295,7 @@ private fun CircleIconButton(
     onClick: () -> Unit,
     haptic: Haptic = Haptic.Tap,
     size: Dp = 50.dp,
+    active: Boolean = false,
 ) {
     val haptics = rememberHaptics()
     Box(
@@ -1282,7 +1313,7 @@ private fun CircleIconButton(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = MaterialTheme.colorScheme.onSurface,
+            tint = if (active) palette.accent else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.size(size * 0.44f),
         )
     }

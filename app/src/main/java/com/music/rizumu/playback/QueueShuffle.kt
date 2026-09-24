@@ -57,10 +57,26 @@ object QueueShuffle {
      * button on an album or playlist page, where the queue it applies to is the
      * one about to replace this one. [playSongs] builds that one shuffled.
      */
-    fun enableForNextQueue() {
+    fun enableForNextQueue() = setForNextQueue(enabled = true)
+
+    /**
+     * Turns shuffle off without touching the current queue — the other half of
+     * [enableForNextQueue].
+     *
+     * For the same page buttons, which are mode toggles: turning the mode off
+     * says what the *next* queue does, and deliberately does not un-shuffle a
+     * queue that is already playing. That queue stays as it is, in the player,
+     * until the player's own toggle restores it.
+     */
+    fun disableForNextQueue() = setForNextQueue(enabled = false)
+
+    private fun setForNextQueue(enabled: Boolean) {
+        // The remembered pre-shuffle order belongs to the live queue; clearing
+        // it here is what keeps a later turn-off from trying to restore an
+        // order that belongs to a queue this button never touched.
         original = emptyList()
-        _enabled.value = true
-        AppSettings.setShuffleEnabled(true)
+        _enabled.value = enabled
+        AppSettings.setShuffleEnabled(enabled)
     }
 
     /**

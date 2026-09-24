@@ -2511,6 +2511,7 @@ private fun RizumuApp(
                             isDownloads = page.browseId == "local:downloads",
                             currentSong = player.song,
                             isPlaying = player.isPlaying,
+                            shuffleEnabled = shuffleEnabled,
                             onDeleteDownloads = { selected ->
                                 scope.launch {
                                     selected.forEach { song -> Downloads.delete(context, song.videoId) }
@@ -2525,13 +2526,17 @@ private fun RizumuApp(
                             },
                             onSongLongPress = openSongMenu,
                             onSongSwipe = onSongSwipe,
-                            onShuffle = { songs ->
-                                QueueShuffle.enableForNextQueue()
-                                playFrom(
-                                    songs,
-                                    songs.indices.random(),
-                                    QueueSource(page.title, PlaybackSourceType.BROWSE, page.browseId),
-                                )
+                            onShuffle = {
+                                // Spotify-like: the circle arms the mode rather
+                                // than starting playback. The queue starts when
+                                // a track is tapped or Play is pressed, and
+                                // [PlayerConnection.playSongs] builds it
+                                // shuffled with that track leading.
+                                if (shuffleEnabled) {
+                                    QueueShuffle.disableForNextQueue()
+                                } else {
+                                    QueueShuffle.enableForNextQueue()
+                                }
                             },
                             emptyMessage = (localState as? com.music.rizumu.data.model.UiState.Error)
                                 ?.message,
@@ -2577,6 +2582,10 @@ private fun RizumuApp(
                             page = page,
                             currentSong = player.song,
                             isPlaying = player.isPlaying,
+                            // Lit on the release's own shuffle circle too, so
+                            // the page says the mode is on without a trip to
+                            // the player.
+                            shuffleEnabled = shuffleEnabled,
                             listState = detailListState,
                             activeShelf = detailActiveShelf,
                             onActiveShelfChange = { detailActiveShelf = it },
@@ -2589,16 +2598,16 @@ private fun RizumuApp(
                             },
                             onSongLongPress = { openSongMenu(withAlbum(it)) },
                             onSongSwipe = onSongSwipe,
-                            onShuffle = { songs ->
-                                // Shuffle goes on first so the queue is built shuffled
-                                // as it is set — the random pick here only decides
-                                // which track leads it.
-                                QueueShuffle.enableForNextQueue()
-                                playFrom(
-                                    songs,
-                                    songs.indices.random(),
-                                    QueueSource(page.title, PlaybackSourceType.BROWSE, page.browseId),
-                                )
+                            onShuffle = {
+                                // Spotify-like: the circle arms the mode, it does
+                                // not start playing. The queue starts on the next
+                                // tap of a track or Play, shuffled with that
+                                // track leading — see [PlayerConnection.playSongs].
+                                if (shuffleEnabled) {
+                                    QueueShuffle.disableForNextQueue()
+                                } else {
+                                    QueueShuffle.enableForNextQueue()
+                                }
                             },
                             onSectionItemClick = { item ->
                                 item.browseId?.let { id ->

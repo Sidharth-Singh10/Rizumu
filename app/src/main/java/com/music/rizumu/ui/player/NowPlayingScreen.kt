@@ -216,6 +216,7 @@ import coil3.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.music.rizumu.ui.theme.SystemBarIcons
+import com.music.rizumu.ui.theme.rememberArtworkPalette
 import com.music.rizumu.ui.rememberIsForeground
 import com.music.rizumu.ui.components.thumbnailBorder
 import com.music.rizumu.ui.components.optimizedHazeEffect
@@ -1098,6 +1099,12 @@ fun NowPlayingScreen(
     // same picture in two different ways, so whichever is not on screen is pure
     // cost — the legacy path pays [rememberArtworkColors] instead.
     val artMesh = if (legacyMesh) null else rememberArtworkMesh(song.thumbnailUrl, canvasFrame, ART_PX)
+    // The artwork's own accent, for the one control that says something about
+    // the record rather than the track: the shuffle toggle. Read dark
+    // regardless of the app's theme — the player is always a dark surface, and
+    // the light-theme accent is mixed for a pale page and would sink into the
+    // mesh. Cached after the first read, like every other palette consumer.
+    val artworkAccent = rememberArtworkPalette(song.thumbnailUrl, dark = true).accent
     // Asked of every clip, Spotify's Canvas and every other source alike — see
     // CanvasArtworkPlayer's refreshFrameEveryMs. A clip's own colours move as
     // it plays regardless of who published it, and the backdrop should follow.
@@ -3261,6 +3268,19 @@ fun NowPlayingScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // Shuffle leads the transport, where every comparable player
+                // puts it and where it stays visible whether or not the queue
+                // panel is up — see [ShuffleGlyph].
+                ShuffleGlyph(
+                    active = shuffleEnabled,
+                    accent = artworkAccent,
+                    contentDescription = stringResource(
+                        if (shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off,
+                    ),
+                    onClick = onToggleShuffle,
+                    haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+                    tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
+                )
                 TransportGlyph(
                     icon = R.drawable.ic_player_previous,
                     contentDescription = stringResource(R.string.widget_previous),
@@ -3402,6 +3422,10 @@ fun NowPlayingScreen(
                                 ),
                                 onClick = onToggleShuffle,
                                 highlighted = shuffleEnabled,
+                                // The one segment whose glyph carries the
+                                // artwork's colour: the accent says the mode is
+                                // on, on the icon rather than as a filled button.
+                                activeTint = artworkAccent,
                                 haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
                                 tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
                             )
@@ -3708,6 +3732,10 @@ private fun WidePlayerControls(
         label = "widePanelFade",
     )
 
+    // As in the phone layout: the artwork's accent, dark regardless of theme,
+    // for the persistent shuffle toggle.
+    val artworkAccent = rememberArtworkPalette(song.thumbnailUrl, dark = true).accent
+
     Box(modifier = modifier.fillMaxSize()) {
         // The same choice between the two backdrop systems the ordinary player
         // makes, just without a hero seam to report: neither of these shapes
@@ -3764,6 +3792,18 @@ private fun WidePlayerControls(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // As on the phone: a persistent shuffle toggle at the head of
+                // the transport, not only the queue panel's capsule.
+                ShuffleGlyph(
+                    active = shuffleEnabled,
+                    accent = artworkAccent,
+                    contentDescription = stringResource(
+                        if (shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off,
+                    ),
+                    onClick = onToggleShuffle,
+                    haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+                    tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
+                )
                 TransportGlyph(
                     icon = R.drawable.ic_player_previous,
                     contentDescription = stringResource(R.string.widget_previous),
@@ -3905,6 +3945,9 @@ private fun WidePlayerControls(
                                     ),
                                     onClick = onToggleShuffle,
                                     highlighted = shuffleEnabled,
+                                    // As on the phone: the artwork's colour on
+                                    // the glyph, not a filled segment.
+                                    activeTint = artworkAccent,
                                     haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
                                     tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
                                 )
@@ -6074,6 +6117,80 @@ private fun TransportGlyph(
     }
 }
 
+/**
+ * Shuffle as a transport control, always on screen.
+ *
+ * Shuffle is a mode the queue plays in, and the players people know put it
+ * beside the transport rather than inside the queue: Apple Music, Spotify and
+ * YouTube Music all keep a persistent toggle, and YouTube Music's 2025
+ * revision added a dot under the glyph because "a little bit bolder" was not
+ * readable as state. This follows both halves of that: the glyph takes the
+ * artwork's own accent when on, and a dot underneath repeats the state without
+ * relying on colour, which is all a colourblind listener would otherwise have.
+ *
+ * The accent is read `dark = true` wherever this is composed — the player is a
+ * dark surface regardless of the app's theme.
+ */
+@Composable
+private fun ShuffleGlyph(
+    active: Boolean,
+    accent: Color,
+    contentDescription: String,
+    onClick: () -> Unit,
+    haptic: Haptic = Haptic.Tap,
+    /** See [BottomGlyph], where the same window means the same thing. */
+    tapWindowMs: Long = 0L,
+) {
+    val haptics = rememberHaptics()
+    val lastTap = remember { mutableLongStateOf(-tapWindowMs) }
+    val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val tint by animateColorAsState(
+        targetValue = if (active) accent else Color.White.copy(alpha = 0.62f),
+        animationSpec = if (reduceAnimation) snap() else tween(durationMillis = 200),
+        label = "shuffleGlyphTint",
+    )
+    val dotAlpha by animateFloatAsState(
+        targetValue = if (active) 1f else 0f,
+        animationSpec = if (reduceAnimation) snap() else tween(durationMillis = 200),
+        label = "shuffleGlyphDot",
+    )
+    Box(
+        modifier = Modifier
+            .size(56.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) {
+                val now = SystemClock.uptimeMillis()
+                if (now - lastTap.longValue >= tapWindowMs) {
+                    lastTap.longValue = now
+                    haptics.play(haptic)
+                    onClick()
+                }
+            }
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        // The glyph stays optically centred on the row's axis, like the
+        // transport drawables beside it; the dot hangs below rather than
+        // pushing the icon up.
+        Icon(
+            imageVector = RizumuIcons.Shuffle,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(26.dp),
+        )
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 5.dp)
+                .size(4.dp)
+                .clip(CircleShape)
+                .background(accent.copy(alpha = dotAlpha)),
+        )
+    }
+}
+
 private val BOTTOM_ACTION_SIZE = 44.dp
 
 /**
@@ -6199,6 +6316,13 @@ private fun PillSegment(
     haptic: Haptic = Haptic.Tap,
     /** See [BottomGlyph], where the same window means the same thing. */
     tapWindowMs: Long = 0L,
+    /**
+     * Icon colour while [highlighted], when the caller has one of its own —
+     * the shuffle segment passes the artwork's accent, so a mode that is on
+     * says so on the glyph while the segment keeps the shared white state
+     * layer. Null keeps the white glyph every other segment uses.
+     */
+    activeTint: Color? = null,
 ) {
     val haptics = rememberHaptics()
     val lastTap = remember { mutableLongStateOf(-tapWindowMs) }
@@ -6221,7 +6345,11 @@ private fun PillSegment(
             .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
-        val tint = Color.White.copy(alpha = if (highlighted) 1f else 0.75f)
+        val tint = if (highlighted) {
+            activeTint ?: Color.White
+        } else {
+            Color.White.copy(alpha = 0.75f)
+        }
         if (icon != null) {
             Icon(
                 imageVector = icon,
