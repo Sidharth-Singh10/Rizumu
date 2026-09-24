@@ -416,7 +416,14 @@ internal fun LibraryGridShelf(
         SectionHeader(
             title = shelf.title,
             subtitle = shelf.subtitle,
-            onShowAll = onShowAll.takeIf { shelf.items.size + leadingCount > LIBRARY_ROW_MAX_ITEMS },
+            // A shelf that names a page of its own always offers it, however
+            // short the row is: "Show all" on it opens the collection, which
+            // is where the whole-of-it actions live. Otherwise the offer waits
+            // for the row to run past what fits.
+            onShowAll = onShowAll.takeIf {
+                shelf.moreBrowseId != null ||
+                    shelf.items.size + leadingCount > LIBRARY_ROW_MAX_ITEMS
+            },
         )
         LazyRow(
             contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
