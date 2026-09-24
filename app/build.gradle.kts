@@ -124,6 +124,15 @@ android {
                 storePassword = signing.getProperty("storePassword")
                 keyAlias = signing.getProperty("keyAlias")
                 keyPassword = signing.getProperty("keyPassword")
+                // Only when the file says so. Left unset, the type comes from
+                // whatever JDK is building — PKCS12 on 9+, which is what the
+                // example keystore is — and pinning it here is what keeps the
+                // choice from being a silent property of the runner. A JKS
+                // keystore that has worked until now keeps working: it simply
+                // does not set this.
+                signing.getProperty("storeType")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { storeType = it }
             }
         }
     }

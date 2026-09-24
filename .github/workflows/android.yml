@@ -1,6 +1,8 @@
 name: Android CI
 
-on: [push, pull_request]
+# workflow_dispatch so the signed prod build can be re-run from the Actions
+# tab without pushing a commit — useful while sorting out signing secrets.
+on: [push, pull_request, workflow_dispatch]
 
 jobs:
   build-dev-debug:
@@ -51,15 +53,60 @@ jobs:
         cache: gradle
 
     - name: Setup Secrets (Keystore & local.properties)
+      env:
+        LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+        LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
-        echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
-        echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+        # `pipefail` matters here. The runner's default shell is `bash -e`
+        # without it, so a `base64 -d` that failed on a bad secret used to
+        # leave the pipeline's status to `echo` and write a truncated file.
+        # Gradle then reported "Tag number over 30 is not supported" from the
+        # signing step, which says nothing about the bytes being wrong.
+        set -euo pipefail
 
-        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > rizumu-release.jks
-        echo "storeFile=rizumu-release.jks" > keystore.properties
-        echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> keystore.properties
-        echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> keystore.properties
-        echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> keystore.properties
+        {
+          echo "LASTFM_API_KEY=$LASTFM_API_KEY"
+          echo "LASTFM_SECRET=$LASTFM_SECRET"
+        } > local.properties
+
+        if [ -z "${KEYSTORE_BASE64}" ]; then
+          echo "::error::KEYSTORE_BASE64 is unset or empty — check the secret name"
+          exit 1
+        fi
+        printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/rizumu-release.jks"
+
+        # Prove the decoded bytes are a keystore before Gradle ever sees them.
+        # A valid one is PKCS12 here, so it opens with the DER SEQUENCE tag and
+        # `keytool` can list it with the store password. Either check failing
+        # isolates the fault to the secret rather than to the build.
+        if [ ! -s "$GITHUB_WORKSPACE/rizumu-release.jks" ]; then
+          echo "::error::decoded keystore is empty"
+          exit 1
+        fi
+        if [ "$(xxd -l 2 -p "$GITHUB_WORKSPACE/rizumu-release.jks")" != "3082" ]; then
+          echo "::error::decoded keystore is not a PKCS12 file (expected first bytes 3082)"
+          xxd -l 16 "$GITHUB_WORKSPACE/rizumu-release.jks"
+          exit 1
+        fi
+        keytool -list -keystore "$GITHUB_WORKSPACE/rizumu-release.jks" -storepass "$KEYSTORE_PASSWORD"
+
+        # `java.util.Properties` reads a backslash as an escape, so one in a
+        # password typed verbatim would come back different. Doubling them here
+        # is what keeps the value the user set the value Gradle sees.
+        prop() {
+          printf '%s=%s\n' "$1" "$(printf '%s' "$2" | sed 's/\\/\\\\/g')"
+        }
+        {
+          echo "storeFile=$GITHUB_WORKSPACE/rizumu-release.jks"
+          echo "storeType=PKCS12"
+          prop "storePassword" "$KEYSTORE_PASSWORD"
+          prop "keyAlias" "$KEY_ALIAS"
+          prop "keyPassword" "$KEY_PASSWORD"
+        } > keystore.properties
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
