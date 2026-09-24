@@ -163,7 +163,7 @@ object DownloadStore {
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             mediaStoreEntry(context, name)
         } else {
-            legacyFile(name).takeIf { it.exists() }?.let(Uri::fromFile)
+            legacyFiles(name).firstOrNull { it.exists() }?.let(Uri::fromFile)
         }
 
     @RequiresApi(Build.VERSION_CODES.Q)
@@ -171,9 +171,14 @@ object DownloadStore {
         context.contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             arrayOf(MediaStore.MediaColumns._ID),
-            "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND " +
-                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
-            arrayOf(name, "%$FOLDER%"),
+            // Both folders: the library shows downloads under the old
+            // `Music/BitChord` name too (the rebrand kept reading them), so
+            // adopting an existing file there is what stops a second copy
+            // being written under `Music/Rizumu`.
+            "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND (" +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR " +
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?)",
+            arrayOf(name, "%$FOLDER%", "%$LEGACY_FOLDER%"),
             null,
         )?.use { cursor ->
             if (!cursor.moveToFirst()) return@use null
@@ -312,11 +317,24 @@ object DownloadStore {
         return Pending(context, Uri.fromFile(target), name, part = part, target = target)
     }
 
+    /** Where a download would be written today — always the new folder. */
     @Suppress("DEPRECATION")
     private fun legacyFile(name: String) = File(
         File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), FOLDER),
         name,
     )
+
+    /**
+     * Where a download might already be, new folder first.
+     *
+     * Pre-Q exports have no MediaStore to query, and an install that predates
+     * the rebrand wrote into `Music/BitChord`; a lookup that only knew the new
+     * folder would re-download a file the library is already showing.
+     */
+    @Suppress("DEPRECATION")
+    private fun legacyFiles(name: String) = listOf(FOLDER, LEGACY_FOLDER).map { folder ->
+        File(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), folder), name)
+    }
 
     private fun privateFile(context: Context, name: String) =
         File(File(context.filesDir, "downloads"), name)
