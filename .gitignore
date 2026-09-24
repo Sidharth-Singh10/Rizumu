@@ -41,3 +41,7 @@ keystore.properties
 
 # AI agent configuration
 AGENTS.md
+
+# Local brand source art — the working files behind the shipped assets.
+# They stay on disk but out of history, the way build output does.
+/new_logo.png
