@@ -51,6 +51,7 @@ import com.music.rizumu.R
 import com.music.rizumu.data.model.LibraryPage
 import com.music.rizumu.data.model.ShelfItem
 import com.music.rizumu.data.model.UiState
+import com.music.rizumu.data.model.shelfIdentity
 import com.music.rizumu.data.model.shelfKey
 import com.music.rizumu.data.settings.AppSettings
 import com.music.rizumu.data.settings.LibrarySort
@@ -463,12 +464,19 @@ fun LibraryGridPage(
     contentPadding: PaddingValues,
     /** True while the shelf is still fetching the rest of its list. */
     completing: Boolean = false,
+    /**
+     * True when the list behind this grid may be incomplete — the walk failed
+     * or stopped on its budget. A search that comes up short over a partial
+     * list must not be told it found nothing.
+     */
+    incomplete: Boolean = false,
     modifier: Modifier = Modifier,
     onNewPlaylist: (() -> Unit)? = null,
 ) {
     // The shelf's own filter. Kept across a rotation and reset when a different
-    // shelf is opened, keyed the way the page is — by its title.
-    var query by rememberSaveable(shelf.title) { mutableStateOf("") }
+    // shelf is opened — keyed by the shelf's stable identity, not its title,
+    // because two sources can name a shelf the same thing.
+    var query by rememberSaveable(shelf.shelfIdentity()) { mutableStateOf("") }
     // Re-read live rather than trusting [shelf] to already be sorted: this page
     // is opened from a snapshot (see `libraryShowAll` in MainActivity), and a
     // pin toggled from this page's own long-press menu must move the card
@@ -522,10 +530,17 @@ fun LibraryGridPage(
             }
             // An empty shelf has its own words elsewhere; only a search that
             // came up short is worth explaining here — and only once the list
-            // it searched is whole.
+            // it searched is whole. Over a partial list the honest line is
+            // that the rest could not be loaded, not that nothing matches.
             if (matches.isEmpty() && shelf.items.isNotEmpty() && !completing) {
                 item(key = "no-matches", span = { GridItemSpan(maxLineSpan) }) {
-                    MessageState(stringResource(R.string.nothing_matches, query))
+                    MessageState(
+                        if (incomplete) {
+                            stringResource(R.string.library_completion_partial)
+                        } else {
+                            stringResource(R.string.nothing_matches, query)
+                        },
+                    )
                 }
             }
             items(matches, key = { it.shelfKey() }) { item ->

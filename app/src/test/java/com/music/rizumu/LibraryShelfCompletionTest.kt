@@ -3,8 +3,10 @@ package com.music.rizumu
 import com.music.rizumu.data.YtMusicRepository
 import com.music.rizumu.data.innertube.InnertubeParser
 import com.music.rizumu.data.model.ShelfItem
+import com.music.rizumu.data.model.shelfKey
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -87,5 +89,84 @@ class LibraryShelfCompletionTest {
 
         assertEquals(1, calls)
         assertTrue(delivered.isEmpty())
+    }
+
+    @Test
+    fun `a start token resumes where the bounded load stopped`() = runBlocking {
+        val delivered = mutableListOf<List<ShelfItem>>()
+
+        val complete = YtMusicRepository.completeLibraryShelf(
+            browseId = "feed",
+            startToken = "resume-here",
+            load = { token ->
+                assertEquals("resume-here", token)
+                InnertubeParser.LibraryItemPage(listOf(card("next")), null)
+            },
+        ) { page -> delivered += page }
+
+        assertTrue(complete)
+        assertEquals(listOf(listOf(card("next"))), delivered)
+    }
+
+    @Test
+    fun `cards the row already showed are not delivered twice`() = runBlocking {
+        val delivered = mutableListOf<List<ShelfItem>>()
+
+        val complete = YtMusicRepository.completeLibraryShelf(
+            browseId = "feed",
+            knownKeys = listOf(card("1").shelfKey()),
+            load = { InnertubeParser.LibraryItemPage(listOf(card("1")), null) },
+        ) { page -> delivered += page }
+
+        assertTrue(complete)
+        assertTrue(delivered.isEmpty())
+    }
+
+    @Test
+    fun `an endless feed stops on the budget and reports a partial list`() = runBlocking {
+        var calls = 0
+        val delivered = mutableListOf<List<ShelfItem>>()
+
+        val complete = YtMusicRepository.completeLibraryShelf(
+            browseId = "feed",
+            load = {
+                calls++
+                InnertubeParser.LibraryItemPage(listOf(card("$calls")), "token-$calls")
+            },
+        ) { page -> delivered += page }
+
+        assertFalse(complete)
+        assertEquals(YtMusicRepository.MAX_COMPLETION_PAGES, calls)
+        assertEquals(YtMusicRepository.MAX_COMPLETION_PAGES, delivered.size)
+    }
+
+    @Test
+    fun `a walk that stops on the budget resumes from where it stopped`() = runBlocking {
+        var calls = 0
+        val complete = YtMusicRepository.completeLibraryShelf(
+            browseId = "budget-feed",
+            load = {
+                calls++
+                InnertubeParser.LibraryItemPage(listOf(card("budget-$calls")), "budget-token-$calls")
+            },
+        ) { }
+
+        assertFalse(complete)
+        val resume = YtMusicRepository.libraryShelfContinuation("budget-feed")
+        assertEquals("budget-token-$calls", resume)
+
+        // The next walk starts from that token rather than from the previews.
+        var resumedFrom: String? = null
+        val finished = YtMusicRepository.completeLibraryShelf(
+            browseId = "budget-feed",
+            startToken = resume,
+            load = { token ->
+                resumedFrom = token
+                InnertubeParser.LibraryItemPage(listOf(card("tail")), null)
+            },
+        ) { }
+
+        assertTrue(finished)
+        assertEquals("budget-token-$calls", resumedFrom)
     }
 }

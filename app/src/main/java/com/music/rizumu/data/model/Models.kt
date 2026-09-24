@@ -249,6 +249,17 @@ data class ShelfItem(
     val thumbnailUrl: String?,
     val videoId: String?,
     val browseId: String?,
+    /**
+     * The track behind a playable card, when the shelf was built from one.
+     *
+     * A [videoId] alone is enough to play, but not to navigate or to queue
+     * with the source it came from: a server track's album and artist ids,
+     * its genre and its album name all live on the [Song]. Carried here so a
+     * card can hand the player the row it was built from rather than a
+     * display-only shell — null for cards that are not tracks, and for
+     * YouTube rows whose metadata is already whole in the id.
+     */
+    val song: Song? = null,
 )
 
 /** The signed-in Google account, as YouTube Music reports it. */
@@ -332,6 +343,29 @@ data class HomeShelf(
  */
 fun ShelfItem.shelfKey(): String =
     browseId ?: videoId ?: "$title\n$subtitle"
+
+/**
+ * A stable identity for a shelf, for state that must reset when a different
+ * shelf is opened.
+ *
+ * The display title alone is not one: two sources can name a shelf the same
+ * thing ("Albums"), and a search typed on one must not filter the other. The
+ * browse id or completion names the list itself; the title stays in as a
+ * tie-break for shelves whose completion is the same list order.
+ */
+fun HomeShelf.shelfIdentity(): String = buildString {
+    append(moreBrowseId.orEmpty())
+    append('\u0000')
+    when (val c = completion) {
+        is ShelfCompletion.ServerAlbums -> append("server-albums:").append(c.configId)
+        is ShelfCompletion.ServerArtists -> append("server-artists:").append(c.configId)
+        is ShelfCompletion.ServerGenres -> append("server-genres:").append(c.configId)
+        is ShelfCompletion.YoutubeShelf -> append("youtube:").append(c.browseId)
+        null -> append("none")
+    }
+    append('\u0000')
+    append(title)
+}
 
 /** A page of the Home feed, plus the token for the next one — null once exhausted. */
 data class HomeFeed(

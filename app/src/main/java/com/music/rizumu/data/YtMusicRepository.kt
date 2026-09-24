@@ -675,12 +675,40 @@ object YtMusicRepository {
         while (true) {
             val parsed = InnertubeParser.parseLibraryItemPage(response)
             parsed.items.forEach { item -> out.putIfAbsent(item.shelfKey(), item) }
-            val token = parsed.continuation ?: break
-            if (page++ >= MAX_PAGES) break
+            val token = parsed.continuation ?: run {
+                shelfContinuations.remove(shelfContinuationKey(browseId, params))
+                break
+            }
+            if (page++ >= MAX_PAGES) {
+                // Stopped on the budget, not at the end: the token is what a
+                // "Show all" walk resumes from, so the preview pages are not
+                // fetched a second time.
+                shelfContinuations[shelfContinuationKey(browseId, params)] = token
+                break
+            }
             response = runCatching { Innertube.browseContinuation(token) }.getOrNull() ?: break
         }
         return out.values.toList()
     }
+
+    /**
+     * Where a library shelf's bounded load stopped, for
+     * [completeLibraryShelf] to resume from.
+     *
+     * Bounded and in memory only: losing it costs the completion re-fetching
+     * the pages the row already showed, which is what it did before this
+     * existed.
+     */
+    private val shelfContinuations = object : LinkedHashMap<String, String>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>) = size > 16
+    }
+
+    private fun shelfContinuationKey(browseId: String, params: String?) =
+        "$browseId\u0000${params.orEmpty()}"
+
+    /** The continuation a bounded library load left behind, or null. */
+    fun libraryShelfContinuation(browseId: String): String? =
+        shelfContinuations[shelfContinuationKey(browseId, null)]
 
     /**
      * The rest of a library shelf, one continuation at a time.
@@ -692,11 +720,25 @@ object YtMusicRepository {
      * list grows on screen rather than after the last request. A failed page or
      * a token that repeats ends the walk; the page keeps what it already has.
      *
+     * The walk carries a budget rather than being unbounded: a malformed feed
+     * that keeps minting fresh tokens could otherwise keep the grid loading
+     * for ever, and a very large library is not worth an endless request
+     * chain on a screen nobody is reading yet. Reaching the budget is
+     * reported as [Boolean] false, which is the grid's cue that its search is
+     * over a partial list rather than a complete one.
+     *
+     * [knownKeys] seeds the deduplication with what the row already shows, and
+     * [startToken] resumes from where the bounded library load stopped — see
+     * [libraryShelfContinuation] — so opening "Show all" does not re-fetch the
+     * pages the row was built from.
+     *
      * [load] is injectable so the loop is testable without the network — the
      * same seam [syncLikedMusic] offers for its own walk.
      */
     suspend fun completeLibraryShelf(
         browseId: String,
+        knownKeys: Collection<String> = emptyList(),
+        startToken: String? = null,
         load: suspend (String?) -> InnertubeParser.LibraryItemPage? = { token ->
             runCatching {
                 InnertubeParser.parseLibraryItemPage(
@@ -709,16 +751,31 @@ object YtMusicRepository {
             }.getOrNull()
         },
         onPage: suspend (List<ShelfItem>) -> Unit,
-    ) {
-        val seen = HashSet<String>()
+    ): Boolean {
+        val seen = HashSet(knownKeys)
         val seenTokens = HashSet<String>()
-        var token: String? = null
+        startToken?.let(seenTokens::add)
+        var token: String? = startToken
+        var pages = 0
+        var items = seen.size
         while (true) {
-            val page = load(token) ?: return
+            val page = load(token) ?: return false
             val fresh = page.items.filter { seen.add(it.shelfKey()) }
+            items += fresh.size
             if (fresh.isNotEmpty()) onPage(fresh)
-            val next = page.continuation ?: return
-            if (!seenTokens.add(next)) return
+            val next = page.continuation ?: run {
+                shelfContinuations.remove(shelfContinuationKey(browseId, null))
+                return true
+            }
+            // A feed pointing back at itself is at its end, not infinite.
+            if (!seenTokens.add(next)) return true
+            if (++pages >= MAX_COMPLETION_PAGES || items >= MAX_COMPLETION_ITEMS) {
+                // Stopped on the budget rather than at the end: remember where
+                // this walk got to, so reopening the grid walks the tail
+                // instead of the same pages all over again.
+                shelfContinuations[shelfContinuationKey(browseId, null)] = next
+                return false
+            }
             token = next
         }
     }
@@ -726,6 +783,15 @@ object YtMusicRepository {
     private suspend fun libraryItemsPaged(browseId: String): List<ShelfItem> = itemsPaged(browseId, null)
 
     const val MAX_PAGES = 10
+
+    /**
+     * The "Show all" walk's budget. High enough that no real library reaches
+     * it, low enough that a feed that keeps answering new tokens cannot keep
+     * the grid loading for ever; hitting either is reported as a partial
+     * result rather than a complete one.
+     */
+    internal const val MAX_COMPLETION_PAGES = 200
+    internal const val MAX_COMPLETION_ITEMS = 10_000
 
     /**
      * Liked Music: the `LM` auto-playlist, addressed as a playlist browse id.
