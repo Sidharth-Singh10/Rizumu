@@ -78,6 +78,7 @@ import com.music.rizumu.data.Http
 import com.music.rizumu.data.LikeState
 import com.music.rizumu.data.NerdStats
 import com.music.rizumu.data.ServerLikeState
+import com.music.rizumu.data.ServerStarQueue
 import com.music.rizumu.data.TrackLog
 import com.music.rizumu.data.discord.DiscordRPC
 import com.music.rizumu.data.innertube.PlaybackTracker
@@ -310,6 +311,14 @@ class PlaybackService : MediaLibraryService() {
      * thousands of songs.
      */
     private var cachedServerLiked: Pair<Long, List<Song>>? = null
+
+    /**
+     * The exact server configuration the snapshot was taken from.
+     *
+     * The fingerprint rather than the id: an edit keeps the id, and a cached
+     * starred list from the old address or account must not answer for the
+     * new one.
+     */
     private var cachedServerLikedKey: String? = null
     private val serverLikedMutex = Mutex()
     private val SERVER_LIKED_CACHE_TTL_MS = 60_000L
@@ -321,7 +330,7 @@ class PlaybackService : MediaLibraryService() {
             cachedServerLikedKey = null
             return emptyList()
         }
-        if (cachedServerLikedKey != null && cachedServerLikedKey != server.id) {
+        if (cachedServerLikedKey != null && cachedServerLikedKey != server.fingerprint) {
             cachedServerLiked = null
         }
         cachedServerLiked?.let { (at, songs) ->
@@ -336,7 +345,7 @@ class PlaybackService : MediaLibraryService() {
         }
         if (songs.isNotEmpty()) {
             cachedServerLiked = SystemClock.elapsedRealtime() to songs
-            cachedServerLikedKey = server.id
+            cachedServerLikedKey = server.fingerprint
             songs.forEach { songCache[it.videoId] = it }
             ServerLikeState.seedStarred(songs.mapTo(HashSet()) { it.videoId })
         }
@@ -345,7 +354,7 @@ class PlaybackService : MediaLibraryService() {
 
     private fun snapshotServerLiked(): List<Song> {
         val server = SourceRegistry.primaryServer()
-        return if (server != null && server.id == cachedServerLikedKey) {
+        return if (server != null && server.fingerprint == cachedServerLikedKey) {
             cachedServerLiked?.second.orEmpty()
         } else {
             emptyList()
@@ -1110,8 +1119,20 @@ class PlaybackService : MediaLibraryService() {
                 }
         }
         scope.launch {
-            LikeState.overrides.collectLatest {
+            // Both hearts, because the button reads both: a star written from
+            // the player or the sheet updates ServerLikeState, and the
+            // notification's own icon must follow it too.
+            combine(LikeState.overrides, ServerLikeState.starred) { _, _ -> Unit }.collectLatest {
                 mediaSession?.setCustomLayout(notificationButtons())
+            }
+        }
+        scope.launch {
+            // A star made anywhere invalidates Auto's snapshot of the liked
+            // folder, so the next time the folder opens it re-reads rather
+            // than showing the list as it was. Seeds do not emit, so this
+            // never invalidates the list with the very fetch that filled it.
+            ServerLikeState.changes.collectLatest {
+                serverLikedMutex.withLock { cachedServerLiked = null }
             }
         }
 
@@ -1816,10 +1837,17 @@ class PlaybackService : MediaLibraryService() {
             SourceRegistry.instance(configId) is ServerLibrary
         } ?: true
 
-    private fun toggleFavoriteFromNotification(videoId: String) {
+    private fun toggleFavoriteFromNotification(song: Song) {
+        val videoId = song.videoId
         val source = SourceRegistry.parseTrackKey(videoId)
         if (source != null) {
-            toggleServerFavorite(videoId, source)
+            val (configId, songId) = source
+            val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return
+            ServerLikeState.set(videoId, !ServerLikeState.isStarred(videoId), song)
+            mediaSession?.setCustomLayout(notificationButtons())
+            // Serialized with the ViewModel's own taps: the two surfaces write
+            // the same star and must not race each other.
+            ServerStarQueue.request(videoId, song, library, songId)
             return
         }
 
@@ -1841,29 +1869,6 @@ class PlaybackService : MediaLibraryService() {
                     LikeState.set(videoId, previous)
                     mediaSession?.setCustomLayout(notificationButtons())
                     TrackLog.w("Rizumu", "notification favorite failed: ${it.message}", about = videoId)
-                }
-        }
-    }
-
-    /**
-     * The notification's heart on a server track: the star is written to the
-     * track's own server, and the optimistic flip is rolled back if it is
-     * refused — the same bargain the YouTube path above makes.
-     */
-    private fun toggleServerFavorite(videoId: String, source: Pair<String, String>) {
-        val (configId, songId) = source
-        val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return
-        favoriteActionJob?.cancel()
-        val previous = ServerLikeState.isStarred(videoId)
-        val target = !previous
-        ServerLikeState.set(videoId, target)
-        mediaSession?.setCustomLayout(notificationButtons())
-        favoriteActionJob = scope.launch {
-            runCatching { library.setSongStarred(songId, target) }
-                .onFailure {
-                    ServerLikeState.set(videoId, previous)
-                    mediaSession?.setCustomLayout(notificationButtons())
-                    TrackLog.w("Rizumu", "notification star failed: ${it.message}", about = videoId)
                 }
         }
     }
@@ -5305,7 +5310,7 @@ class PlaybackService : MediaLibraryService() {
                 ACTION_COMMIT_RADIO_QUEUE -> player?.let(::saveQueueSnapshotImmediately)
                 ACTION_UPGRADE_QUALITY -> upgradeQualityNow()
                 ACTION_REORDER_QUEUE -> player?.let { QueueShuffle.reorderFromCommand(it, args) }
-                ACTION_TOGGLE_FAVORITE -> session.player.currentMediaItem?.mediaId?.let {
+                ACTION_TOGGLE_FAVORITE -> session.player.currentMediaItem?.toSong()?.let {
                     toggleFavoriteFromNotification(it)
                 }
                 else -> return Futures.immediateFuture(
@@ -5793,7 +5798,13 @@ class PlaybackService : MediaLibraryService() {
                         resolved.addAll(songs.map { it.toMediaItem() })
                     }
                     id == MEDIA_LIKED_ID -> {
-                        val songs = cachedLikedSongs()
+                        // The same primary-library decision the browse
+                        // callback makes, so a controller that resolves this
+                        // folder itself gets the server's stars in server mode
+                        // rather than YouTube's liked list.
+                        val serverPrimary = SourceRegistry.primaryServer() != null &&
+                            AppSettings.primaryLibrary.value == PrimaryLibrary.SERVER
+                        val songs = if (serverPrimary) cachedServerLikedSongs() else cachedLikedSongs()
                         if (songs.isNotEmpty()) {
                             resolved.addAll(songs.map { it.toMediaItem() })
                         }

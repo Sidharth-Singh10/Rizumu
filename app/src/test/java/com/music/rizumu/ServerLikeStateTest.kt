@@ -48,4 +48,15 @@ class ServerLikeStateTest {
 
         assertFalse(ServerLikeState.isStarred("src:a::1"))
     }
+
+    @Test
+    fun `forget clears one server and leaves the others alone`() {
+        ServerLikeState.seedStarred(listOf("src:a::1", "src:a::2", "src:b::1"))
+
+        ServerLikeState.forget("a")
+
+        assertFalse(ServerLikeState.isStarred("src:a::1"))
+        assertFalse(ServerLikeState.isStarred("src:a::2"))
+        assertTrue(ServerLikeState.isStarred("src:b::1"))
+    }
 }
