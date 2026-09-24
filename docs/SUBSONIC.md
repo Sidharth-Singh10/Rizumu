@@ -33,9 +33,11 @@ one.
 2. Fill in:
    - **Address** — `https://music.example.com` or `http://192.168.1.10:4533`.
      Both that and `.../rest` are accepted; a reverse proxy sub-path works
-     too. Plain HTTP is allowed (a LAN or Tailscale address usually is one),
-     but on an untrusted network put a TLS proxy in front — over HTTP the
-     account token and the audio itself travel unencrypted.
+     too. Plain HTTP is blocked until you explicitly allow it on the editor's
+     **Allow plain HTTP** row, because every request carries your account
+     name and a reusable credential in its query string; on an untrusted
+     network put a TLS proxy in front instead — over HTTP the token and the
+     audio itself travel unencrypted.
    - **Username** and **password** — the same account you use with any other
      Subsonic client. A read-only account is enough unless you want to create
      or edit playlists from Rizumu.
@@ -46,10 +48,14 @@ one.
 4. Tap **Browse** on the server's row to open its library.
 
 Credentials are stored in the app's encrypted preferences, alongside every
-other secret. Authentication uses Subsonic's token scheme
-(`t = md5(password + salt)`), so the password itself is not sent on each
-request; if a server does not support token auth, Rizumu falls back to the
-legacy password parameter automatically for that server.
+other secret. If a device's Keystore cannot be initialised, Rizumu still runs
+but refuses to write the password to the unencrypted fallback store: the
+server stays configured for that session and asks for the password again next
+launch, rather than leaving a reusable credential readable on disk.
+Authentication uses Subsonic's token scheme (`t = md5(password + salt)`), so
+the password itself is not sent on each request; if a server does not support
+token auth, Rizumu falls back to the legacy password parameter automatically
+for that server.
 
 ## Stream quality
 
@@ -75,7 +81,8 @@ original file, whatever the mode.
 | Streaming | Original files and server-side transcodes |
 | Cover art | Fetched from the server |
 | Browse | Artists, albums (newest), random tracks, playlists and starred items on the server's home page; artist and album pages |
-| Playlists | Read, play, create, add to, remove from, rename and delete |
+| Playlists | Read, play, create, add to, remove from, rename and delete — rename and delete only on playlists the account owns, which the server reports as the playlist's `owner` |
+| Stars | Star and unstar songs. The heart writes to the server that holds the track, and the Play tab's **Liked songs** row and its collection page mirror the change |
 | Play reporting | Now-playing and finished plays are sent to the server, in addition to Last.fm / ListenBrainz. No Last.fm account is needed for this: if the server itself scrobbles to Last.fm or ListenBrainz (Navidrome's per-user settings), it forwards them, so server tracks reach ListenBrainz without a token in Rizumu. |
 | Lyrics | OpenSubsonic structured lyrics (with timings), falling back to the server's own tag reader |
 | Downloads & offline | The normal Rizumu downloader; lossless keeps the original file |
@@ -83,9 +90,8 @@ original file, whatever the mode.
 
 ## What is not supported yet
 
-- **Stars and ratings** — the heart is hidden for server tracks rather than
-  pretending to rate them on YouTube. Server-side stars/ratings are a planned
-  addition.
+- **Album and artist stars** — only songs can be starred; the album and artist
+  rows the server returns are shown but carry no heart of their own.
 - **Play queue sync** (`getPlayQueue`/`savePlayQueue`) and OpenSubsonic
   `reportPlayback` — the legacy `scrobble` call is used instead, which every
   server understands.

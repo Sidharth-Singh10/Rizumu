@@ -14,7 +14,7 @@
 [![Downloads](https://img.shields.io/github/downloads/Sidharth-Singh10/Rizumu/total?style=for-the-badge&labelColor=0d1117)](https://github.com/Sidharth-Singh10/Rizumu/releases)
 
 
-[**Download**](#download) · [**Features**](#features) · [**Contributing**](#contributing) · [**Support**](#support) · [**Disclaimer**](#disclaimer)
+[**Download**](#download) · [**Features**](#features) · [**Contributing**](#contributing) · [**Disclaimer**](#disclaimer)
 
 <br/>
 </div>
@@ -106,8 +106,6 @@ Rizumu is an independent, community-driven third-party audio player and client. 
 * **Fair Use & API Usage:** This software is created solely for personal research, educational, and fair-use purposes. The user is entirely responsible for ensuring their usage aligns with their local copyright laws and YouTube Terms of Service.
 * **No Ad-Blocking Guarantee:** While Rizumu focuses on providing a clean listening environment, it does not guarantee permanent bypasses or modifications to commercial third-party platform conditions.
 * **Copyleft:** Rizumu is free software under the GPLv3. The license does not let anyone forbid others from selling or redistributing copies, but any distribution must come with the Corresponding Source under the same license.
-
-</div>
 
 ---
 
