@@ -82,6 +82,7 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -128,6 +129,7 @@ import com.music.rizumu.data.model.SearchFilter
 import com.music.rizumu.data.model.SearchResult
 import com.music.rizumu.data.model.ServerHomePage
 import com.music.rizumu.data.model.ShelfItem
+import com.music.rizumu.data.model.shelfKey
 import com.music.rizumu.data.model.Song
 import com.music.rizumu.data.model.UiState
 import com.music.rizumu.data.model.durationMillis
@@ -687,6 +689,10 @@ private fun RizumuApp(
     val serverHomeRefreshing by viewModel.serverHomeRefreshing.collectAsStateWithLifecycle()
     val serverLibrary by viewModel.serverLibrary.collectAsStateWithLifecycle()
     val serverLibraryRefreshing by viewModel.serverLibraryRefreshing.collectAsStateWithLifecycle()
+    // The rest of an open "Show all" grid, fetched while it is on screen — see
+    // MainViewModel.completeShelf.
+    val shelfExtras by viewModel.shelfExtras.collectAsStateWithLifecycle()
+    val shelfCompleting by viewModel.shelfCompleting.collectAsStateWithLifecycle()
     val sourceConfigs by SourceRegistry.configs.collectAsStateWithLifecycle()
     // Changes when the server the primary-library screens read from changes:
     // a different first server, one switched off, one edited. The refresh
@@ -2253,8 +2259,26 @@ private fun RizumuApp(
                         )
                     } else if (key == "library_show_all") {
                         libraryShowAll?.let { shelf ->
+                            // The grid holds the whole list, not the row's
+                            // preview: completion starts when the page appears
+                            // and is stopped when it leaves, however it left.
+                            LaunchedEffect(shelf) { viewModel.completeShelf(shelf) }
+                            DisposableEffect(shelf) {
+                                onDispose { viewModel.cancelShelfCompletion() }
+                            }
+                            val merged = remember(shelf, shelfExtras) {
+                                if (shelfExtras.isEmpty()) {
+                                    shelf
+                                } else {
+                                    shelf.copy(
+                                        items = (shelf.items + shelfExtras).distinctBy { it.shelfKey() },
+                                        completion = null,
+                                    )
+                                }
+                            }
                             LibraryGridPage(
-                                shelf = shelf,
+                                shelf = merged,
+                                completing = shelfCompleting,
                                 gridState = libraryShowAllGridState,
                                 // Which page opened this grid decides who
                                 // handles its cards: a server row's cards carry

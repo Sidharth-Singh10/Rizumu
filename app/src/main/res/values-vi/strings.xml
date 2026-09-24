@@ -395,6 +395,7 @@
     <string name="about_artist">Về nghệ sĩ</string>
     <string name="about_album">Về album</string>
     <string name="nothing_matches">Không có nội dung nào khớp với “%1$s”</string>
+    <string name="library_loading_all">Đang tải phần còn lại của thư viện…</string>
     <string name="close_search">Đóng tìm kiếm</string>
     <string name="less">Thu gọn</string>
     <string name="song_count_with_minutes">%1$s, %2$d phút</string>

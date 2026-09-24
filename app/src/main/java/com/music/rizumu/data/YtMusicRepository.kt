@@ -15,7 +15,9 @@ import com.music.rizumu.data.model.MoodGenreSection
 import com.music.rizumu.data.model.PlaylistPrivacy
 import com.music.rizumu.data.model.SearchFilter
 import com.music.rizumu.data.model.SearchResult
+import com.music.rizumu.data.model.ShelfCompletion
 import com.music.rizumu.data.model.ShelfItem
+import com.music.rizumu.data.model.shelfKey
 import com.music.rizumu.data.model.Song
 import com.music.rizumu.data.model.SongMenu
 import com.music.rizumu.data.model.UserPlaylist
@@ -433,7 +435,14 @@ object YtMusicRepository {
             val shelves = LIBRARY_FEEDS
                 .map { (title, browseId) ->
                     async {
-                        HomeShelf(title, runCatching { libraryItemsPaged(browseId) }.getOrDefault(emptyList()))
+                        // The row is a preview; the shelf names the feed behind
+                        // it so the "Show all" page can walk the rest — see
+                        // [completeLibraryShelf].
+                        HomeShelf(
+                            title = title,
+                            items = runCatching { libraryItemsPaged(browseId) }.getOrDefault(emptyList()),
+                            completion = ShelfCompletion.YoutubeShelf(browseId),
+                        )
                     }
                 }
                 .awaitAll()
@@ -665,15 +674,53 @@ object YtMusicRepository {
         var page = 1
         while (true) {
             val parsed = InnertubeParser.parseLibraryItemPage(response)
-            parsed.items.forEach { item ->
-                val key = item.browseId ?: item.videoId ?: "${item.title}\n${item.subtitle}"
-                out.putIfAbsent(key, item)
-            }
+            parsed.items.forEach { item -> out.putIfAbsent(item.shelfKey(), item) }
             val token = parsed.continuation ?: break
             if (page++ >= MAX_PAGES) break
             response = runCatching { Innertube.browseContinuation(token) }.getOrNull() ?: break
         }
         return out.values.toList()
+    }
+
+    /**
+     * The rest of a library shelf, one continuation at a time.
+     *
+     * Unlike [itemsPaged], which stops at [MAX_PAGES] so a library load stays
+     * bounded, this walks the feed to its end: a shelf's "Show all" page exists
+     * to hold the whole list, and the search over it is only exhaustive if it
+     * does. Each page's new cards are handed to [onPage] as they arrive, so the
+     * list grows on screen rather than after the last request. A failed page or
+     * a token that repeats ends the walk; the page keeps what it already has.
+     *
+     * [load] is injectable so the loop is testable without the network — the
+     * same seam [syncLikedMusic] offers for its own walk.
+     */
+    suspend fun completeLibraryShelf(
+        browseId: String,
+        load: suspend (String?) -> InnertubeParser.LibraryItemPage? = { token ->
+            runCatching {
+                InnertubeParser.parseLibraryItemPage(
+                    if (token == null) {
+                        Innertube.browse(browseId)
+                    } else {
+                        Innertube.browseContinuation(token)
+                    },
+                )
+            }.getOrNull()
+        },
+        onPage: suspend (List<ShelfItem>) -> Unit,
+    ) {
+        val seen = HashSet<String>()
+        val seenTokens = HashSet<String>()
+        var token: String? = null
+        while (true) {
+            val page = load(token) ?: return
+            val fresh = page.items.filter { seen.add(it.shelfKey()) }
+            if (fresh.isNotEmpty()) onPage(fresh)
+            val next = page.continuation ?: return
+            if (!seenTokens.add(next)) return
+            token = next
+        }
     }
 
     private suspend fun libraryItemsPaged(browseId: String): List<ShelfItem> = itemsPaged(browseId, null)

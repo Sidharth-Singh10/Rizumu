@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +51,7 @@ import com.music.rizumu.R
 import com.music.rizumu.data.model.LibraryPage
 import com.music.rizumu.data.model.ShelfItem
 import com.music.rizumu.data.model.UiState
+import com.music.rizumu.data.model.shelfKey
 import com.music.rizumu.data.settings.AppSettings
 import com.music.rizumu.data.settings.LibrarySort
 import com.music.rizumu.download.Downloads
@@ -459,6 +461,8 @@ fun LibraryGridPage(
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: (ShelfItem) -> Unit,
     contentPadding: PaddingValues,
+    /** True while the shelf is still fetching the rest of its list. */
+    completing: Boolean = false,
     modifier: Modifier = Modifier,
     onNewPlaylist: (() -> Unit)? = null,
 ) {
@@ -498,6 +502,13 @@ fun LibraryGridPage(
                     placeholder = stringResource(R.string.search_this_list),
                 )
             }
+            // The whole-list fetch says so while it runs: a search that finds
+            // nothing yet is not the same as a search that found nothing.
+            if (completing) {
+                item(key = "completing", span = { GridItemSpan(maxLineSpan) }) {
+                    LoadingAllRow()
+                }
+            }
             if (onNewPlaylist != null) {
                 item(key = "leading") {
                     NewShelfCard(
@@ -510,13 +521,14 @@ fun LibraryGridPage(
                 }
             }
             // An empty shelf has its own words elsewhere; only a search that
-            // came up short is worth explaining here.
-            if (matches.isEmpty() && shelf.items.isNotEmpty()) {
+            // came up short is worth explaining here — and only once the list
+            // it searched is whole.
+            if (matches.isEmpty() && shelf.items.isNotEmpty() && !completing) {
                 item(key = "no-matches", span = { GridItemSpan(maxLineSpan) }) {
                     MessageState(stringResource(R.string.nothing_matches, query))
                 }
             }
-            items(matches, key = { it.browseId ?: it.title }) { item ->
+            items(matches, key = { it.shelfKey() }) { item ->
                 ShelfCard(
                     item = item,
                     onClick = { onItemClick(item) },
@@ -526,6 +538,23 @@ fun LibraryGridPage(
                 )
             }
         }
+    }
+}
+
+/** "Loading the rest of the library", a line under the search field. */
+@Composable
+private fun LoadingAllRow() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = stringResource(R.string.library_loading_all),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -539,10 +568,11 @@ fun LibraryGridPage(
  * card the subtitle is the artist and on an artist card it is the release
  * count, so the filter reaches whatever the card itself shows.
  *
- * Only what was loaded can be found: the server's Albums shelf holds the first
- * hundred alphabetically (`SERVER_LIBRARY_ALBUMS`), and a YouTube shelf stops
- * at ten pages of continuation. The field narrows the page in front of it; it
- * is not a library-wide search.
+ * The grid completes the shelf before searching it: a row is a preview, and the
+ * page fetches the rest of the list in the background — see MainViewModel's
+ * `completeShelf` — so what is filtered here is the whole list, not the first
+ * page of it. A shelf that cannot be completed (a selection, a ranking) offers
+ * what it has, which is all there is of it.
  */
 internal fun List<ShelfItem>.matching(query: String): List<ShelfItem> {
     val needle = query.trim()

@@ -42,6 +42,8 @@ import com.music.rizumu.data.model.SearchResult
 import com.music.rizumu.data.model.ServerHomePage
 import com.music.rizumu.data.model.ServerLibraryPage
 import com.music.rizumu.data.model.ShelfItem
+import com.music.rizumu.data.model.ShelfCompletion
+import com.music.rizumu.data.model.shelfKey
 import com.music.rizumu.data.model.Song
 import com.music.rizumu.data.model.SongMenu
 import com.music.rizumu.data.model.SubscriptionState
@@ -66,6 +68,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -2871,6 +2874,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val browseId = genre.genreBrowseKey(config.id)
                     genre.toShelfItem(config.id, serverDiscoveryArtwork.get(browseId))
                 },
+                // The row previews twenty; the grid can hold them all.
+                completion = ShelfCompletion.ServerGenres(config.id),
             )
         }
         shelves += HomeShelf(
@@ -3106,7 +3111,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         mostPlayed.takeIf { it.isNotEmpty() }
                             ?.let { list -> HomeShelf(text(R.string.your_albums), list.map { it.toShelfItem(config.id) }) },
                         alphabetical.await().takeIf { it.isNotEmpty() }
-                            ?.let { list -> HomeShelf(text(R.string.albums), list.map { it.toShelfItem(config.id) }) },
+                            ?.let { list ->
+                                HomeShelf(
+                                    title = text(R.string.albums),
+                                    items = list.map { it.toShelfItem(config.id) },
+                                    // The shelf holds the first page of a
+                                    // catalogue that may be larger; the grid
+                                    // walks the rest — see [completeShelf].
+                                    completion = ShelfCompletion.ServerAlbums(config.id),
+                                )
+                            },
                         knownArtists.takeIf { it.isNotEmpty() }
                             ?.let { list -> HomeShelf(text(R.string.artists), list.map { it.toShelfItem(config.id) }) },
                         starredItems.takeIf { it.isNotEmpty() }
@@ -3138,6 +3152,109 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun invalidateServerPages() {
         serverLibraryKey = null
         serverHomeKey = null
+    }
+
+    // ── Show-all grid completion ─────────────────────────────────────────
+
+    private val _shelfExtras = MutableStateFlow<List<ShelfItem>>(emptyList())
+
+    /** Cards fetched after a row's own preview, for the grid that is open. */
+    val shelfExtras: StateFlow<List<ShelfItem>> = _shelfExtras.asStateFlow()
+
+    private val _shelfCompleting = MutableStateFlow(false)
+
+    /** Whether the open grid is still fetching the rest of its shelf. */
+    val shelfCompleting: StateFlow<Boolean> = _shelfCompleting.asStateFlow()
+
+    private var shelfCompletionJob: Job? = null
+
+    /**
+     * Fetches the rest of [shelf]'s list for the "Show all" grid it opened.
+     *
+     * The row a grid is opened from is a preview — the first hundred albums, a
+     * bounded set of a YouTube library feed — and both the grid and the search
+     * field on it are meant to range over the whole list, so the remainder is
+     * walked here and appended as each page arrives. A shelf with nothing to
+     * complete ([HomeShelf.completion] is null) is left as it stands: it is
+     * already whole, or it is a selection whose whole is the selection.
+     *
+     * One completion runs at a time; opening another shelf replaces it, and
+     * leaving the grid cancels it — see [cancelShelfCompletion].
+     */
+    fun completeShelf(shelf: HomeShelf) {
+        shelfCompletionJob?.cancel()
+        shelfCompletionJob = null
+        _shelfExtras.value = emptyList()
+        val completion = shelf.completion
+        if (completion == null) {
+            _shelfCompleting.value = false
+            return
+        }
+        _shelfCompleting.value = true
+        shelfCompletionJob = viewModelScope.launch {
+            try {
+                when (completion) {
+                    is ShelfCompletion.ServerAlbums -> {
+                        val library = SourceRegistry.instance(completion.configId) as? ServerLibrary
+                            ?: return@launch
+                        library.allAlbums(
+                            type = ServerAlbumListType.ALPHABETICAL_BY_NAME,
+                            from = shelf.items.size,
+                        ) { page ->
+                            appendShelfItems(page.map { it.toShelfItem(completion.configId) })
+                        }
+                    }
+
+                    is ShelfCompletion.ServerGenres -> {
+                        val library = SourceRegistry.instance(completion.configId) as? ServerLibrary
+                            ?: return@launch
+                        // The same order the row used: what this device plays
+                        // first, then the server's own order behind it.
+                        val affinity = runCatching { ListeningStats.genreAffinity() }
+                            .getOrDefault(emptyMap())
+                        val genres = library.genres()
+                            .sortedByDescending { affinity[genreKey(it.name)] ?: 0L }
+                        appendShelfItems(
+                            genres.drop(shelf.items.size).map { genre ->
+                                genre.toShelfItem(
+                                    completion.configId,
+                                    serverDiscoveryArtwork.get(genre.genreBrowseKey(completion.configId)),
+                                )
+                            },
+                        )
+                    }
+
+                    is ShelfCompletion.YoutubeShelf -> {
+                        YtMusicRepository.completeLibraryShelf(completion.browseId) { page ->
+                            appendShelfItems(page)
+                        }
+                    }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                // The grid keeps the preview it already had; a shelf that
+                // cannot be completed is still browsable.
+                TrackLog.w("Rizumu", "shelf completion failed: ${failure.message}")
+            } finally {
+                _shelfCompleting.value = false
+            }
+        }
+    }
+
+    /** Stops the running completion and forgets what it appended. */
+    fun cancelShelfCompletion() {
+        shelfCompletionJob?.cancel()
+        shelfCompletionJob = null
+        _shelfExtras.value = emptyList()
+        _shelfCompleting.value = false
+    }
+
+    private fun appendShelfItems(items: List<ShelfItem>) {
+        if (items.isEmpty()) return
+        _shelfExtras.update { current ->
+            (current + items).distinctBy { item -> item.shelfKey() }
+        }
     }
 
     /** The tracks behind a server browse id, for the queue and download actions. */

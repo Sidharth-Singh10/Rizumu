@@ -156,6 +156,25 @@ class SubsonicSource(
             client.albums(type.wire, offset, size, fromYear, toYear, genre).map { it.toServerAlbum() }
         }
 
+    override suspend fun allAlbums(
+        type: ServerAlbumListType,
+        from: Int,
+        onPage: suspend (List<ServerAlbum>) -> Unit,
+    ) = withContext(Dispatchers.IO) {
+        var offset = from.coerceAtLeast(0)
+        var pages = 0
+        while (pages < MAX_ALBUM_PAGES) {
+            val page = client.albums(type.wire, offset, ALBUM_PAGE).map { it.toServerAlbum() }
+            if (page.isEmpty()) return@withContext
+            onPage(page)
+            // A short page is the end of the catalogue; a full one means there
+            // may be more behind the offset.
+            if (page.size < ALBUM_PAGE) return@withContext
+            offset += page.size
+            pages++
+        }
+    }
+
     override suspend fun randomSongs(size: Int, fromYear: Int?, toYear: Int?): List<Song> =
         withContext(Dispatchers.IO) {
             client.randomSongs(size, fromYear, toYear).toSongs()
@@ -434,6 +453,20 @@ class SubsonicSource(
 
     private companion object {
         const val TAG = "Rizumu"
+
+        /**
+         * The endpoint's own page: `getAlbumList2` answers at most 500 rows.
+         * Walking the catalogue in these steps is what lets a "Show all" page
+         * hold every album rather than the first page of them.
+         */
+        const val ALBUM_PAGE = 500
+
+        /**
+         * A ceiling on the walk, not a product decision: a server that answers
+         * a full page for an offset past the end of the catalogue would
+         * otherwise be asked forever.
+         */
+        const val MAX_ALBUM_PAGES = 100
 
         /** How many search rows to remember. A long queue's worth, several times over. */
         const val MAX_ROWS = 256

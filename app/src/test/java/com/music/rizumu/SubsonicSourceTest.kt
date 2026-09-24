@@ -4,6 +4,7 @@ import com.music.rizumu.data.ServerLikeState
 import com.music.rizumu.data.settings.AppSettings
 import com.music.rizumu.data.settings.AudioQuality
 import com.music.rizumu.data.sources.ModuleSource
+import com.music.rizumu.data.sources.ServerAlbum
 import com.music.rizumu.data.sources.ServerAlbumListType
 import com.music.rizumu.data.sources.SourceConfig
 import com.music.rizumu.data.sources.SourceHealth
@@ -505,6 +506,41 @@ class SubsonicSourceTest {
         assertEquals("Trip-Hop", request.requestUrl?.queryParameter("genre"))
         assertEquals("1", request.requestUrl?.queryParameter("size"))
         assertNull(request.requestUrl?.queryParameter("fromYear"))
+    }
+
+    @Test
+    fun `every album is walked a page at a time`() = runBlocking {
+        val firstPage = (1..500).joinToString(",") {
+            """{"id":"al-$it","name":"Album $it","artist":"A","coverArt":"al-$it"}"""
+        }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                synchronized(seen) { seen += request }
+                return when (request.requestUrl?.queryParameter("offset")) {
+                    "0" -> ok(""","albumList2":{"album":[$firstPage]}""")
+                    "500" -> ok(""","albumList2":{"album":[{"id":"al-501","name":"Last","artist":"A","coverArt":"al-501"}]}""")
+                    else -> ok()
+                }
+            }
+        }
+
+        val pages = mutableListOf<List<ServerAlbum>>()
+        source().allAlbums(ServerAlbumListType.ALPHABETICAL_BY_NAME) { pages += it }
+
+        assertEquals(2, pages.size)
+        assertEquals(500, pages[0].size)
+        assertEquals("Last", pages[1].single().name)
+        assertEquals(listOf("0", "500"), seen.map { it.requestUrl?.queryParameter("offset") })
+        assertEquals("500", seen[0].requestUrl?.queryParameter("size"))
+    }
+
+    @Test
+    fun `allAlbums starts where the preview ended`() = runBlocking {
+        route("/rest/getAlbumList2", ok())
+
+        source().allAlbums(ServerAlbumListType.ALPHABETICAL_BY_NAME, from = 100) { }
+
+        assertEquals("100", seen.single().requestUrl?.queryParameter("offset"))
     }
 
     @Test

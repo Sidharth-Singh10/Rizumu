@@ -50,6 +50,23 @@ interface ServerLibrary {
         genre: String? = null,
     ): List<ServerAlbum>
 
+    /**
+     * Every album of [type], a page at a time, starting at [from] and stopping
+     * when the server runs out.
+     *
+     * The endpoint answers at most 500 rows and takes an offset, so a
+     * catalogue larger than one page is walked rather than asked for in a
+     * single call. [onPage] is invoked with each page as it arrives and in
+     * order, so a caller can let the list grow on screen — this is how a
+     * "Show all" page comes to hold the whole catalogue, which is what makes
+     * the search over it exhaustive.
+     */
+    suspend fun allAlbums(
+        type: ServerAlbumListType,
+        from: Int = 0,
+        onPage: suspend (List<ServerAlbum>) -> Unit,
+    )
+
     /** A random selection from the library, optionally bounded to a year range. */
     suspend fun randomSongs(size: Int, fromYear: Int? = null, toYear: Int? = null): List<Song>
 

@@ -510,6 +510,7 @@
     <string name="about_artist">About the artist</string>
     <string name="about_album">About the album</string>
     <string name="nothing_matches">Nothing here matches “%1$s”</string>
+    <string name="library_loading_all">Loading the rest of your library…</string>
     <string name="close_search">Close search</string>
     <string name="less">Less</string>
     <string name="song_count_with_minutes">%1$s, %2$d minutes</string>

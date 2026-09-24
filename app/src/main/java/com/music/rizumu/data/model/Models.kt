@@ -288,6 +288,26 @@ data class AccountChannel(
     val key: String get() = pageId ?: dataSyncId ?: name
 }
 
+/**
+ * How a shelf's "Show all" page can fetch the rest of its list.
+ *
+ * The row a shelf draws is a preview; the grid behind it is where the whole
+ * list belongs, and the search field on that grid is only exhaustive if the
+ * list is. A shelf that can be completed says so here, at the point where it
+ * is built and its source is known. A shelf that is already whole — a server
+ * list with no paging, a selection, a ranking — leaves this null.
+ */
+sealed interface ShelfCompletion {
+    /** Every album the server holds, in the alphabetical order the shelf keeps. */
+    data class ServerAlbums(val configId: String) : ShelfCompletion
+
+    /** Every genre the server holds; the row only previews the first few. */
+    data class ServerGenres(val configId: String) : ShelfCompletion
+
+    /** The rest of a YouTube library feed, one continuation at a time. */
+    data class YoutubeShelf(val browseId: String) : ShelfCompletion
+}
+
 data class HomeShelf(
     val title: String,
     val items: List<ShelfItem>,
@@ -295,7 +315,20 @@ data class HomeShelf(
     val subtitle: String = "",
     val moreBrowseId: String? = null,
     val moreParams: String? = null,
+    /** How to fetch the rest of this shelf when its grid needs the whole list. */
+    val completion: ShelfCompletion? = null,
 )
+
+/**
+ * Identity of a shelf card within its shelf, for deduping the pages a
+ * completion appends to the cards the row already carried.
+ *
+ * A saved collection is named by its browse id, a track by its video id, and
+ * anything with neither falls back to what it displays — the same order of
+ * preference every library feed already dedupes by.
+ */
+fun ShelfItem.shelfKey(): String =
+    browseId ?: videoId ?: "$title\n$subtitle"
 
 /** A page of the Home feed, plus the token for the next one — null once exhausted. */
 data class HomeFeed(
