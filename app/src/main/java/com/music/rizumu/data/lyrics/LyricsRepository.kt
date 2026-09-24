@@ -1,5 +1,6 @@
 package com.music.rizumu.data.lyrics
 
+import com.music.rizumu.data.sources.SourceRegistry
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -101,8 +102,16 @@ object LyricsRepository {
         // Settled before anyone is asked for words, so every source that can
         // name the recording does. What the caller knows beats what we worked
         // out last time, and both beat asking again.
+        //
+        // A track from the user's own server skips the preflight: its words
+        // live on that server when they live anywhere, and the identification
+        // exists to help name-matching third parties — contacting one for a
+        // track the first-party source can answer is a request the user did
+        // not ask for.
+        val serverBacked = LyricsSource.SERVER in sequence &&
+            SourceRegistry.parseTrackKey(videoId) != null
         val known = isrc?.takeIf { it.isNotBlank() } ?: isrcs[videoId]
-        val hit = if (known == null) {
+        val hit = if (known == null && !serverBacked) {
             identify(videoId, searchTitle, searchArtist, durationMs, album, sequence)
         } else {
             null
