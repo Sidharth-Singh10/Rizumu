@@ -545,18 +545,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * own server — including one that is not primary, because the id carries
      * the server it came from.
      *
+     * The whole [song] rather than its id, because a server star also has to
+     * correct the lists it appears in, and the card those lists draw needs the
+     * title, credit and cover the same object already carries.
+     *
      * Whether a track can be liked at all is the surfaces' separate question;
      * see [canLikeServerTrack].
      */
-    fun toggleLike(videoId: String) {
-        val source = SourceRegistry.parseTrackKey(videoId)
+    fun toggleLike(song: Song) {
+        val source = SourceRegistry.parseTrackKey(song.videoId)
         if (source != null) {
-            toggleServerLike(videoId, source)
+            toggleServerLike(song, source)
             return
         }
         setLike(
-            videoId,
-            if (likeStatusOf(videoId) == LikeStatus.LIKE) LikeStatus.INDIFFERENT else LikeStatus.LIKE,
+            song.videoId,
+            if (likeStatusOf(song.videoId) == LikeStatus.LIKE) {
+                LikeStatus.INDIFFERENT
+            } else {
+                LikeStatus.LIKE
+            },
         )
     }
 
@@ -571,63 +579,146 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * The write in flight for each server track, so a second tap supersedes the
+     * first rather than racing it: two overlapping requests can reach the
+     * server in either order, and the track can be left starred when the UI
+     * says otherwise. The same bargain the notification's heart makes — see
+     * `toggleServerFavorite`.
+     */
+    private val serverLikeWrites = mutableMapOf<String, Job>()
+
+    /**
      * Stars or unstars a server track.
      *
      * Written to the screen first and rolled back if the server refuses, for
      * the same reason [setLike] is: it is one tap on a track the user is
      * looking at, and a control that waits on a round trip before it changes
-     * reads as a tap that missed. An unstar drops the track from whatever
-     * likes list is on screen — see [dropFromServerLikedLists] — and either
-     * way the server tabs are marked stale so the row and its count catch up
-     * on the next visit.
+     * reads as a tap that missed.
+     *
+     * Nothing is invalidated to make room for the change. The lists that exist
+     * because of a star — the Play tab's Liked songs row and the liked page —
+     * are corrected where they are, by [patchServerLikedLists]; re-reading a
+     * whole `getStarred2` after every tap would cost a full starred list to
+     * learn one track's new state, which the patch already knows.
      */
-    private fun toggleServerLike(videoId: String, source: Pair<String, String>) {
+    private fun toggleServerLike(song: Song, source: Pair<String, String>) {
         val (configId, songId) = source
         val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return
-        val previous = ServerLikeState.isStarred(videoId)
+        val previous = ServerLikeState.isStarred(song.videoId)
         val target = !previous
-        ServerLikeState.set(videoId, target)
-        viewModelScope.launch {
-            runCatching { library.setSongStarred(songId, target) }.fold(
-                onSuccess = {
-                    if (!target) dropFromServerLikedLists(videoId)
-                    invalidateServerPages()
+        ServerLikeState.set(song.videoId, target)
+        serverLikeWrites[song.videoId]?.cancel()
+        val write = viewModelScope.launch {
+            try {
+                library.setSongStarred(songId, target)
+                patchServerLikedLists(song, configId, liked = target)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                // A newer tap is writing this track; its job owns the outcome,
+                // and this one's result — including one the server already
+                // applied — is no longer the user's latest intent.
+                throw cancelled
+            } catch (failure: Exception) {
+                TrackLog.w("Rizumu", "server star failed: ${failure.message}", about = song.videoId)
+                ServerLikeState.set(song.videoId, previous)
+                patchServerLikedLists(song, configId, liked = previous)
+            }
+        }
+        serverLikeWrites[song.videoId] = write
+        // Only this write's own handle, so a tap that has already replaced it
+        // keeps the one a third tap needs to cancel.
+        write.invokeOnCompletion {
+            if (serverLikeWrites[song.videoId] === write) serverLikeWrites.remove(song.videoId)
+        }
+    }
+
+    /**
+     * As [dropFromLikedLists], for the server's collection: puts the track into
+     * the Play tab's Liked songs row and the liked page when it has been
+     * starred, and takes it out again when it has not.
+     *
+     * The row is found by its `moreBrowseId` rather than its title — the title
+     * is translated, and the same track can sit in "Recently played" beside it,
+     * where a star is no reason to remove anything. Only [configId]'s own
+     * surfaces are touched: a like on a server that is not the primary one
+     * leaves the dashboard alone rather than writing another server's track
+     * into it.
+     *
+     * A first star builds the row the dashboard would have built, so the
+     * collection is on screen the moment there is something to show; the last
+     * unstar takes the row away again, exactly as an empty one never appears.
+     */
+    private fun patchServerLikedLists(song: Song, configId: String, liked: Boolean) {
+        val home = (_serverHome.value as? UiState.Success)?.data
+        if (home != null && serverHomeConfigId == configId) {
+            val shelves = if (liked) {
+                home.shelves.withLiked(song, configId)
+            } else {
+                home.shelves.withoutLiked(song.videoId)
+            }
+            _serverHome.value = UiState.Success(home.copy(shelves = shelves))
+        }
+        _detailStack.value = _detailStack.value.map { page ->
+            if (!page.isLikedPage(configId)) return@map page
+            // An empty collection is an error state, so a song arriving has to
+            // turn one back into a listing.
+            val songs = when (val state = page.songs) {
+                is UiState.Success -> state.data
+                is UiState.Error -> emptyList()
+                is UiState.Loading -> return@map page
+            }
+            val updated = if (liked) {
+                if (songs.any { it.videoId == song.videoId }) songs else listOf(song) + songs
+            } else {
+                songs.filterNot { it.videoId == song.videoId }
+            }
+            page.copy(
+                songs = if (updated.isEmpty()) {
+                    UiState.Error(text(R.string.server_liked_empty))
+                } else {
+                    UiState.Success(updated)
                 },
-                onFailure = {
-                    ServerLikeState.set(videoId, previous)
-                },
+                subtitle = text(R.string.card_songs_format, updated.size),
             )
         }
     }
 
     /**
-     * As [dropFromLikedLists], for the server's collection: takes an unstarred
-     * track out of the Play tab's Liked songs row and out of the liked page
-     * itself, if either is on screen.
-     *
-     * The row is found by its `moreBrowseId` rather than its title — the title
-     * is translated, and the same track can sit in "Recently played" beside it,
-     * where unstarring is no reason to remove anything. Only ever removes; the
-     * next dashboard load places anything newly starred.
+     * The Liked songs row: its own title, the songs themselves, and the
+     * collection page behind it in `moreBrowseId` — so "Show all" opens the
+     * list rather than a grid of the same cards.
      */
-    private fun dropFromServerLikedLists(videoId: String) {
-        val home = (_serverHome.value as? UiState.Success)?.data
-        if (home != null) {
-            var changed = false
-            val shelves = home.shelves.mapNotNull { shelf ->
-                if (!shelf.isLikedShelf()) return@mapNotNull shelf
-                val remaining = shelf.items.filterNot { it.videoId == videoId }
-                if (remaining.size == shelf.items.size) return@mapNotNull shelf
-                changed = true
-                remaining.takeIf { it.isNotEmpty() }?.let { shelf.copy(items = it) }
-            }
-            if (changed) _serverHome.value = UiState.Success(home.copy(shelves = shelves))
+    private fun likedShelf(songs: List<Song>, configId: String) = HomeShelf(
+        title = text(R.string.server_liked_songs),
+        items = songs.take(SERVER_LIKED_ROW).map { it.toShelfItem() },
+        moreBrowseId = SourceRegistry.browseKey(configId, ServerBrowseKind.STARRED),
+    )
+
+    /**
+     * This dashboard with [song] at the front of its Liked songs row, creating
+     * that row when this is the first like. Newest first, which is the order
+     * the server itself keeps stars in, and the same cap the dashboard applies.
+     */
+    private fun List<HomeShelf>.withLiked(song: Song, configId: String): List<HomeShelf> {
+        val index = indexOfFirst { it.isLikedShelf() }
+        if (index < 0) return listOf(likedShelf(listOf(song), configId)) + this
+        val shelf = this[index]
+        if (shelf.items.any { it.videoId == song.videoId }) return this
+        return toMutableList().apply {
+            this[index] = shelf.copy(
+                items = (listOf(song.toShelfItem()) + shelf.items).take(SERVER_LIKED_ROW),
+            )
         }
-        _detailStack.value = _detailStack.value.map { page ->
-            if (!page.isLikedPage()) return@map page
-            val songs = (page.songs as? UiState.Success)?.data ?: return@map page
-            if (songs.none { it.videoId == videoId }) return@map page
-            page.copy(songs = UiState.Success(songs.filterNot { it.videoId == videoId }))
+    }
+
+    /** This dashboard without [videoId], and without the row once it is empty. */
+    private fun List<HomeShelf>.withoutLiked(videoId: String): List<HomeShelf> {
+        val index = indexOfFirst { it.isLikedShelf() }
+        if (index < 0) return this
+        val shelf = this[index]
+        val remaining = shelf.items.filterNot { it.videoId == videoId }
+        if (remaining.size == shelf.items.size) return this
+        return toMutableList().apply {
+            if (remaining.isEmpty()) removeAt(index) else this[index] = shelf.copy(items = remaining)
         }
     }
 
@@ -635,9 +726,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun HomeShelf.isLikedShelf(): Boolean =
         moreBrowseId?.let(SourceRegistry::parseBrowseKey)?.kind == ServerBrowseKind.STARRED
 
-    /** Whether this page is the liked-songs collection. */
-    private fun DetailPage.isLikedPage(): Boolean =
-        SourceRegistry.parseBrowseKey(browseId)?.kind == ServerBrowseKind.STARRED
+    /** Whether this page is [configId]'s liked-songs collection. */
+    private fun DetailPage.isLikedPage(configId: String): Boolean =
+        SourceRegistry.parseBrowseKey(browseId)?.let {
+            it.kind == ServerBrowseKind.STARRED && it.configId == configId
+        } == true
 
     /** As [toggleLike], for the thumb-down. */
     fun toggleDislike(videoId: String) = setLike(
@@ -2634,6 +2727,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var serverHomeLoading = false
 
     /**
+     * The server whose dashboard is on screen, or null when none is.
+     *
+     * What lets a like on a server that is not the primary one leave the
+     * dashboard alone: the correction this app makes is scoped to the server
+     * the track came from, and the row on screen belongs to this one.
+     */
+    private var serverHomeConfigId: String? = null
+
+    /**
      * Play-tab discovery covers, keyed by the card's browse id.
      *
      * The map outlives any one page, which is what keeps a tab switch or a
@@ -2658,6 +2760,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (config == null) {
             _serverHome.value = UiState.Loading
             serverHomeKey = null
+            serverHomeConfigId = null
             return
         }
         val key = serverKey(config)
@@ -2692,6 +2795,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val page = buildServerHomePage(config, library)
                 _serverHome.value = UiState.Success(page)
+                serverHomeConfigId = config.id
                 // Only once the page is on screen: the fill patches it in
                 // place, and there is nothing to patch before this.
                 fillServerDiscoveryArtwork(library, page)
@@ -2717,15 +2821,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The listener's own collection, first: it is the one row that is what
         // they made rather than what the server suggested. Hidden when empty,
         // like the rows below it — the heart on any track is how it fills.
-        // The row shows the tracks themselves; the collection page it opens
-        // travels in `moreBrowseId`, so "Show all" opens the list, not a grid.
         val starred = runCatching { library.starred() }.getOrDefault(ServerStarred())
         if (starred.songs.isNotEmpty()) {
-            shelves += HomeShelf(
-                title = text(R.string.server_liked_songs),
-                items = starred.songs.take(SERVER_LIKED_ROW).map { it.toShelfItem() },
-                moreBrowseId = SourceRegistry.browseKey(config.id, ServerBrowseKind.STARRED),
-            )
+            shelves += likedShelf(starred.songs, config.id)
         }
 
         // Track-level recency, from this device's own history — the protocol

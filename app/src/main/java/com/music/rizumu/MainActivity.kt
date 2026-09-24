@@ -1929,7 +1929,7 @@ private fun RizumuApp(
                         (signedIn && SourceRegistry.parseTrackKey(displayedSong.videoId) == null)
                 ),
             likeStatus = likeStatuses[song.videoId] ?: LikeStatus.INDIFFERENT,
-            onToggleLike = { viewModel.toggleLike(song.videoId) },
+            onToggleLike = { viewModel.toggleLike(song) },
             // The service owns both the queue and the Shuffle state. Keeping
             // the toggle on that side prevents the UI from changing the icon
             // before its asynchronous reorder command has actually landed.
@@ -3258,7 +3258,7 @@ private fun RizumuApp(
                     onDownload = { downloadSong(song) },
                     // The sheet stays up for a rating: it shows the new state
                     // in place, and people often thumb a song and then queue it.
-                    onToggleLike = { viewModel.toggleLike(song.videoId) },
+                    onToggleLike = { viewModel.toggleLike(song) },
                     onToggleDislike = { viewModel.toggleDislike(song.videoId) },
                     onAddToPlaylist = if (serverMode && SourceRegistry.parseTrackKey(song.videoId) == null) {
                         // Server mode has no YouTube account, so a YouTube
