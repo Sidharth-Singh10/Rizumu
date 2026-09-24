@@ -31,4 +31,15 @@ internal class ServerArtworkCache {
     fun put(id: String, cover: String?) {
         covers[id] = cover.orEmpty()
     }
+
+    /**
+     * Forgets every answer for cards whose browse id starts with [prefix].
+     *
+     * Used when a server's configuration changes: the ids carry only the
+     * stable config id, so an edit would otherwise reuse the old server's
+     * signed cover URL and suppress a fresh lookup.
+     */
+    fun clear(prefix: String) {
+        covers.keys.removeIf { it.startsWith(prefix) }
+    }
 }

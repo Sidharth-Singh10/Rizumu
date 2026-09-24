@@ -14,6 +14,7 @@ import com.music.rizumu.data.AppUpdateChecker
 import com.music.rizumu.data.LocalMediaRepository
 import com.music.rizumu.data.LikeState
 import com.music.rizumu.data.ServerLikeState
+import com.music.rizumu.data.ServerStarQueue
 import com.music.rizumu.data.YtMusicRepository
 import com.music.rizumu.data.lyrics.EmbeddedLyrics
 import com.music.rizumu.data.lyrics.LyricLine
@@ -399,6 +400,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _serverPlaylists = MutableStateFlow<UiState<List<ServerPlaylist>>>(UiState.Loading)
     val serverPlaylists: StateFlow<UiState<List<ServerPlaylist>>> = _serverPlaylists.asStateFlow()
 
+    /**
+     * Whether the account may change a server playlist, by its browse id.
+     *
+     * Absent until asked, and the surfaces that offer rename or delete treat
+     * absent as "no": a shared or public playlist must not be offered a
+     * destructive action that the server would only refuse. Asked when a
+     * playlist page's menu opens — see [resolveServerPlaylistOwnership].
+     */
+    private val _serverPlaylistOwned = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val serverPlaylistOwned: StateFlow<Map<String, Boolean>> = _serverPlaylistOwned.asStateFlow()
+
+    /**
+     * The last server write that failed, as a line for the user.
+     *
+     * One-shot: the screen shows it and calls [clearServerActionError]. Kept
+     * here rather than swallowed into a log because a rename or delete that
+     * did not reach the server must not look like one that did.
+     */
+    private val _serverActionError = MutableStateFlow<String?>(null)
+    val serverActionError: StateFlow<String?> = _serverActionError.asStateFlow()
+
+    fun clearServerActionError() {
+        _serverActionError.value = null
+    }
+
     /** In-memory cache is partitioned by account and profile; it is never shared. */
     private data class ListenerSnapshot(
         val account: Account?, val library: UiState<LibraryPage>,
@@ -583,56 +609,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The write in flight for each server track, so a second tap supersedes the
-     * first rather than racing it: two overlapping requests can reach the
-     * server in either order, and the track can be left starred when the UI
-     * says otherwise. The same bargain the notification's heart makes — see
-     * `toggleServerFavorite`.
-     */
-    private val serverLikeWrites = mutableMapOf<String, Job>()
-
-    /**
      * Stars or unstars a server track.
      *
      * Written to the screen first and rolled back if the server refuses, for
      * the same reason [setLike] is: it is one tap on a track the user is
      * looking at, and a control that waits on a round trip before it changes
-     * reads as a tap that missed.
+     * reads as a tap that missed. The write itself is queued per track, so a
+     * rapid second tap cannot reach the server out of order — see
+     * [ServerStarQueue].
      *
      * Nothing is invalidated to make room for the change. The lists that exist
      * because of a star — the Play tab's Liked songs row and the liked page —
-     * are corrected where they are, by [patchServerLikedLists]; re-reading a
-     * whole `getStarred2` after every tap would cost a full starred list to
-     * learn one track's new state, which the patch already knows.
+     * are corrected where they are when the change lands, by the collector of
+     * [ServerLikeState.changes]; re-reading a whole `getStarred2` after every
+     * tap would cost a full starred list to learn one track's new state, which
+     * the patch already knows.
      */
     private fun toggleServerLike(song: Song, source: Pair<String, String>) {
         val (configId, songId) = source
         val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return
-        val previous = ServerLikeState.isStarred(song.videoId)
-        val target = !previous
-        ServerLikeState.set(song.videoId, target)
-        serverLikeWrites[song.videoId]?.cancel()
-        val write = viewModelScope.launch {
-            try {
-                library.setSongStarred(songId, target)
-                patchServerLikedLists(song, configId, liked = target)
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                // A newer tap is writing this track; its job owns the outcome,
-                // and this one's result — including one the server already
-                // applied — is no longer the user's latest intent.
-                throw cancelled
-            } catch (failure: Exception) {
-                TrackLog.w("Rizumu", "server star failed: ${failure.message}", about = song.videoId)
-                ServerLikeState.set(song.videoId, previous)
-                patchServerLikedLists(song, configId, liked = previous)
-            }
-        }
-        serverLikeWrites[song.videoId] = write
-        // Only this write's own handle, so a tap that has already replaced it
-        // keeps the one a third tap needs to cancel.
-        write.invokeOnCompletion {
-            if (serverLikeWrites[song.videoId] === write) serverLikeWrites.remove(song.videoId)
-        }
+        ServerLikeState.set(song.videoId, !ServerLikeState.isStarred(song.videoId), song)
+        ServerStarQueue.request(song.videoId, song, library, songId)
     }
 
     /**
@@ -664,10 +661,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _detailStack.value = _detailStack.value.map { page ->
             if (!page.isLikedPage(configId)) return@map page
             // An empty collection is an error state, so a song arriving has to
-            // turn one back into a listing.
+            // turn one back into a listing. Only that state, though: a page
+            // that failed to load for a network or parsing reason is unknown,
+            // not empty, and turning it into a one-song list would claim the
+            // server holds something it was never asked about successfully.
             val songs = when (val state = page.songs) {
                 is UiState.Success -> state.data
-                is UiState.Error -> emptyList()
+                is UiState.Error -> if (state.message == text(R.string.server_liked_empty)) {
+                    emptyList()
+                } else {
+                    return@map page
+                }
                 is UiState.Loading -> return@map page
             }
             val updated = if (liked) {
@@ -1284,6 +1288,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             // drop(1): the current value is just the count so far, not a play.
             PlaybackTracker.registeredPlays.drop(1).collect { homeStale = true }
+        }
+        viewModelScope.launch {
+            // A source edit keeps its config id, so state keyed by that id —
+            // star overrides, resolved covers — would otherwise survive into
+            // the new account or address. Cleared per changed config, so an
+            // unrelated source keeps what it has learned.
+            //
+            // The first emission is compared rather than dropped: a publish
+            // between seeding `previous` and collecting would otherwise be
+            // the one value `drop(1)` swallowed, and its edit would go
+            // uncleared. Nothing changed means nothing to clear, so keeping
+            // the first emission costs nothing.
+            var previous = SourceRegistry.configs.value.associate { it.id to it.fingerprint }
+            SourceRegistry.configs.collect { configs ->
+                val current = configs.associate { it.id to it.fingerprint }
+                (previous.keys + current.keys)
+                    .filter { previous[it] != current[it] }
+                    .forEach { configId ->
+                        ServerLikeState.forget(configId)
+                        val prefix = "srcb:$configId::"
+                        serverDiscoveryArtwork.clear(prefix)
+                        serverDiscoveryArtworkInFlight.removeIf { it.startsWith(prefix) }
+                        // Ownership was an answer about the old account; the
+                        // new one has to be asked again.
+                        _serverPlaylistOwned.update { owned ->
+                            owned.filterKeys { !it.startsWith(prefix) }
+                        }
+                    }
+                previous = current
+            }
+        }
+        viewModelScope.launch {
+            // Every star change, wherever it was made — this screen, the
+            // player, the notification — corrects the lists that show the
+            // track. The change carries the row when the caller had one; a
+            // seed or a rollback without it has nothing to insert.
+            ServerLikeState.changes.collect { change ->
+                val song = change.song ?: return@collect
+                val configId = SourceRegistry.parseTrackKey(change.videoId)?.first ?: return@collect
+                patchServerLikedLists(song, configId, liked = change.starred)
+            }
         }
         viewModelScope.launch {
             AppSettings.filterNonMusicAudio.drop(1).collect {
@@ -2592,6 +2637,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         thumbnailUrl = thumbnailUrl,
         videoId = videoId,
         browseId = null,
+        song = this,
     )
 
     /**
@@ -2604,6 +2650,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         thumbnailUrl = art,
         videoId = id,
         browseId = null,
+        // The stored row carries the server metadata the card would otherwise
+        // have dropped: without it, "Open album"/"Open artist" on a recently
+        // played card have no server ids to route and the queue loses its
+        // source.
+        song = Song(
+            videoId = id,
+            title = title,
+            artist = artist,
+            thumbnailUrl = art,
+            albumName = album,
+            albumId = albumId,
+            artistId = artistId,
+            genre = genre,
+        ),
     )
 
     private fun updateServerPage(browseId: String, transform: (DetailPage) -> DetailPage) {
@@ -2636,8 +2696,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return@launch
             val songId = song?.let { SourceRegistry.parseTrackKey(it.videoId)?.second }
             runCatching { library.createPlaylist(name, listOfNotNull(songId)) }
-                .onSuccess { invalidateServerPages() }
-                .onFailure { TrackLog.w("Rizumu", "server playlist create failed: ${it.message}") }
+                .onSuccess {
+                    invalidateServerPages()
+                    refreshServerPagesFor(configId)
+                }
+                .onFailure {
+                    TrackLog.w("Rizumu", "server playlist create failed: ${it.message}")
+                    _serverActionError.value = it.message ?: text(R.string.server_page_failed)
+                }
         }
     }
 
@@ -2647,8 +2713,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val library = SourceRegistry.instance(configId) as? ServerLibrary ?: return@launch
             val songId = SourceRegistry.parseTrackKey(song.videoId)?.second ?: return@launch
             runCatching { library.updatePlaylist(playlistId, addSongIds = listOf(songId)) }
-                .onFailure { TrackLog.w("Rizumu", "server playlist add failed: ${it.message}") }
-            reloadServerPlaylistIfOpen(configId, playlistId)
+                .onSuccess {
+                    reloadServerPlaylistIfOpen(configId, playlistId)
+                    invalidateServerPages()
+                    refreshServerPagesFor(configId)
+                }
+                .onFailure {
+                    TrackLog.w("Rizumu", "server playlist add failed: ${it.message}")
+                    _serverActionError.value = it.message ?: text(R.string.server_page_failed)
+                }
         }
     }
 
@@ -2658,20 +2731,60 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val library = SourceRegistry.instance(ref.configId) as? ServerLibrary ?: return@launch
             val songId = SourceRegistry.parseTrackKey(song.videoId)?.second ?: return@launch
             runCatching { library.updatePlaylist(ref.id, removeSongIds = listOf(songId)) }
-                .onFailure { TrackLog.w("Rizumu", "server playlist remove failed: ${it.message}") }
-            reloadServerPlaylistIfOpen(ref.configId, ref.id)
+                .onSuccess {
+                    reloadServerPlaylistIfOpen(ref.configId, ref.id)
+                    invalidateServerPages()
+                    refreshServerPagesFor(ref.configId)
+                }
+                .onFailure {
+                    TrackLog.w("Rizumu", "server playlist remove failed: ${it.message}")
+                    _serverActionError.value = it.message ?: text(R.string.server_page_failed)
+                }
         }
     }
 
-    /** Renames a server playlist and updates its open page, if it has one. */
+    /**
+     * Works out whether the account may change [ref]'s playlist, once.
+     *
+     * The answer rides on the playlist list the server answers with — see
+     * [ServerPlaylist.canEdit] — so this is one call and the sheet waits for
+     * it rather than guessing. A failure leaves the answer unknown, and the
+     * surfaces that read it offer no write at all.
+     */
+    fun resolveServerPlaylistOwnership(ref: ServerBrowseRef) {
+        val browseId = SourceRegistry.browseKey(ref.configId, ServerBrowseKind.PLAYLIST, ref.id)
+        if (browseId in _serverPlaylistOwned.value) return
+        viewModelScope.launch {
+            val library = SourceRegistry.instance(ref.configId) as? ServerLibrary ?: return@launch
+            val playlist = runCatching { library.playlists() }.getOrNull()
+                ?.firstOrNull { it.id == ref.id }
+            _serverPlaylistOwned.update { it + (browseId to (playlist?.canEdit == true)) }
+        }
+    }
+
+    /**
+     * Renames a server playlist and updates its open page, if it has one.
+     *
+     * The title changes only after the server accepted the rename: the form is
+     * reachable for server playlists, and an offline or refused rename must
+     * not leave the page showing a name the server never took. The playlists
+     * shelf on the primary pages is refreshed on success for the same reason.
+     */
     fun renameServerPlaylist(ref: ServerBrowseRef, name: String) {
         viewModelScope.launch {
             val library = SourceRegistry.instance(ref.configId) as? ServerLibrary ?: return@launch
-            runCatching { library.updatePlaylist(ref.id, name = name) }
-                .onSuccess { invalidateServerPages() }
-                .onFailure { TrackLog.w("Rizumu", "server playlist rename failed: ${it.message}") }
             val browseId = SourceRegistry.browseKey(ref.configId, ServerBrowseKind.PLAYLIST, ref.id)
-            updateServerPage(browseId) { it.copy(title = name) }
+            if (_serverPlaylistOwned.value[browseId] == false) return@launch
+            runCatching { library.updatePlaylist(ref.id, name = name) }
+                .onSuccess {
+                    updateServerPage(browseId) { it.copy(title = name) }
+                    invalidateServerPages()
+                    refreshServerPagesFor(ref.configId)
+                }
+                .onFailure {
+                    TrackLog.w("Rizumu", "server playlist rename failed: ${it.message}")
+                    _serverActionError.value = it.message ?: text(R.string.server_page_failed)
+                }
         }
     }
 
@@ -2680,16 +2793,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *
      * The page is popped rather than left showing a list the server no longer
      * has: a page whose subject is gone can only be refreshed into an error,
-     * and closing it is what the user meant by deleting it.
+     * and closing it is what the user meant by deleting it. Popped only after
+     * the server accepted the delete — a refusal must leave the playlist on
+     * screen rather than pretend it is gone.
      */
     fun deleteServerPlaylist(ref: ServerBrowseRef) {
         viewModelScope.launch {
             val library = SourceRegistry.instance(ref.configId) as? ServerLibrary ?: return@launch
-            runCatching { library.deletePlaylist(ref.id) }
-                .onSuccess { invalidateServerPages() }
-                .onFailure { TrackLog.w("Rizumu", "server playlist delete failed: ${it.message}") }
             val browseId = SourceRegistry.browseKey(ref.configId, ServerBrowseKind.PLAYLIST, ref.id)
-            _detailStack.value = _detailStack.value.filterNot { it.browseId == browseId }
+            if (_serverPlaylistOwned.value[browseId] == false) return@launch
+            runCatching { library.deletePlaylist(ref.id) }
+                .onSuccess {
+                    _detailStack.value = _detailStack.value.filterNot { it.browseId == browseId }
+                    invalidateServerPages()
+                    refreshServerPagesFor(ref.configId)
+                }
+                .onFailure {
+                    TrackLog.w("Rizumu", "server playlist delete failed: ${it.message}")
+                    _serverActionError.value = it.message ?: text(R.string.server_page_failed)
+                }
+        }
+    }
+
+    /**
+     * Reloads the primary server pages a playlist write has changed, when they
+     * are already on screen.
+     *
+     * [invalidateServerPages] alone only makes the next visit refetch, which
+     * leaves the shelves being looked at showing the playlist as it was. The
+     * reload is in place and without the pull indicator: the write has already
+     * answered the user, and a spinner would read as a second action.
+     */
+    private fun refreshServerPagesFor(configId: String) {
+        val config = SourceRegistry.primaryServer()?.takeIf { it.id == configId } ?: return
+        if (_serverLibrary.value is UiState.Success) {
+            loadServerLibrary(config, config.fingerprint, showIndicator = false)
+        }
+        if (_serverHome.value is UiState.Success) {
+            loadServerHome(config, config.fingerprint, showIndicator = false)
         }
     }
 
@@ -2726,9 +2867,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _serverHomeRefreshing = MutableStateFlow(false)
     val serverHomeRefreshing: StateFlow<Boolean> = _serverHomeRefreshing.asStateFlow()
 
-    /** The server the loaded page describes, and whether a load is in flight. */
+    /** The server the loaded page describes. */
     private var serverHomeKey: String? = null
-    private var serverHomeLoading = false
+
+    /**
+     * The in-flight home load, and the generation that owns it.
+     *
+     * A server switch while a load is running must not be swallowed: the
+     * replacement request is started here rather than dropped, and a request
+     * that is no longer the current generation may not publish its page or
+     * clear the loading flag. Cancellation alone is not enough — the HTTP call
+     * is blocking inside the coroutine, so a cancelled job can still reach its
+     * next line — hence the generation check on every write.
+     */
+    private var serverHomeJob: Job? = null
+    private val serverHomeGeneration = AtomicLong(0L)
 
     /**
      * The server whose dashboard is on screen, or null when none is.
@@ -2762,25 +2915,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onServerHomeShown() {
         val config = SourceRegistry.primaryServer()
         if (config == null) {
+            // Bumped as well as cancelled: a cancelled job's blocking call can
+            // still return and reach its publish, and without the new
+            // generation it would put the removed server's dashboard back on
+            // screen over this empty state.
+            serverHomeJob?.cancel()
+            serverHomeJob = null
+            serverHomeGeneration.incrementAndGet()
             _serverHome.value = UiState.Loading
             serverHomeKey = null
             serverHomeConfigId = null
             return
         }
-        val key = serverKey(config)
-        if (serverHomeLoading) return
+        val key = config.fingerprint
         if (serverHomeKey == key && _serverHome.value is UiState.Success) return
+        // A different key replaces any load in flight rather than returning:
+        // the effect that calls this fires once per server change, so
+        // returning here would leave the new server with no load at all.
         loadServerHome(config, key, showIndicator = false)
     }
 
     /** Forces a reload — the Play tab's pull-to-refresh, and the error retry. */
     fun refreshServerHome() {
         val config = SourceRegistry.primaryServer() ?: return
-        if (serverHomeLoading) return
-        loadServerHome(config, serverKey(config), showIndicator = true)
+        loadServerHome(config, config.fingerprint, showIndicator = true)
     }
 
     private fun loadServerHome(config: SourceConfig, key: String, showIndicator: Boolean) {
+        serverHomeJob?.cancel()
+        val generation = serverHomeGeneration.incrementAndGet()
         // Kept on screen when the same server is refreshed, including after a
         // playlist write invalidated it; the loading state is for a first load
         // or for a genuinely different server's dashboard.
@@ -2788,16 +2951,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_serverHome.value !is UiState.Success || (previousKey != null && previousKey != key)) {
             _serverHome.value = UiState.Loading
         }
-        serverHomeLoading = true
         if (showIndicator) _serverHomeRefreshing.value = true
-        viewModelScope.launch {
+        serverHomeJob = viewModelScope.launch {
             try {
                 val library = SourceRegistry.instance(config.id) as? ServerLibrary
                 if (library == null) {
-                    _serverHome.value = UiState.Error(text(R.string.server_page_failed))
+                    if (serverHomeGeneration.get() == generation) {
+                        _serverHome.value = UiState.Error(text(R.string.server_page_failed))
+                    }
                     return@launch
                 }
                 val page = buildServerHomePage(config, library)
+                if (serverHomeGeneration.get() != generation) return@launch
                 _serverHome.value = UiState.Success(page)
                 serverHomeConfigId = config.id
                 // Only once the page is on screen: the fill patches it in
@@ -2808,10 +2973,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 throw cancelled
             } catch (failure: Exception) {
                 TrackLog.w("Rizumu", "server home failed: ${failure.message}")
-                _serverHome.value = UiState.Error(failure.message ?: text(R.string.server_page_failed))
+                if (serverHomeGeneration.get() == generation) {
+                    _serverHome.value = UiState.Error(failure.message ?: text(R.string.server_page_failed))
+                }
             } finally {
-                serverHomeLoading = false
-                if (showIndicator) _serverHomeRefreshing.value = false
+                if (serverHomeGeneration.get() == generation) {
+                    // Cleared even when this job was not the pull: if it
+                    // superseded one, that pull was cancelled and there is
+                    // nothing left to show progress for. Guarding on this
+                    // job's own [showIndicator] would leave the indicator on
+                    // for ever after a background refresh replaced a pull.
+                    _serverHomeRefreshing.value = false
+                }
             }
         }
     }
@@ -2994,9 +3167,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return runCatching { library.randomSongs(SERVER_SHUFFLE_SONGS) }.getOrDefault(emptyList())
     }
 
-    /** The identity of a configured server, for telling "same" from "changed". */
-    private fun serverKey(config: SourceConfig): String = "${config.id}@${config.baseUrl}"
-
     /** Everything the server-library tab shows, loaded together. */
     private val _serverLibrary = MutableStateFlow<UiState<ServerLibraryPage>>(UiState.Loading)
     val serverLibrary: StateFlow<UiState<ServerLibraryPage>> = _serverLibrary.asStateFlow()
@@ -3012,7 +3182,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val serverLibraryRefreshing: StateFlow<Boolean> = _serverLibraryRefreshing.asStateFlow()
 
     private var serverLibraryKey: String? = null
-    private var serverLibraryLoading = false
+
+    /** As [serverHomeJob], for the Library tab. */
+    private var serverLibraryJob: Job? = null
+    private val serverLibraryGeneration = AtomicLong(0L)
 
     /**
      * Called when the Library tab becomes current.
@@ -3025,13 +3198,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onServerLibraryShown() {
         val config = SourceRegistry.primaryServer()
         if (config == null) {
+            // As in [onServerHomeShown]: cancelled is not fenced, so the
+            // generation moves too.
+            serverLibraryJob?.cancel()
+            serverLibraryJob = null
+            serverLibraryGeneration.incrementAndGet()
             _serverLibrary.value = UiState.Error(text(R.string.server_home_empty))
             serverLibraryKey = null
             return
         }
-        val key = serverKey(config)
-        if (serverLibraryLoading) return
+        val key = config.fingerprint
         if (serverLibraryKey == key && _serverLibrary.value is UiState.Success) return
+        // Replaces an in-flight load for a different server rather than
+        // returning; see [loadServerHome].
         loadServerLibrary(config, key, showIndicator = false)
     }
 
@@ -3042,11 +3221,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _serverLibrary.value = UiState.Error(text(R.string.server_home_empty))
             return
         }
-        if (serverLibraryLoading) return
-        loadServerLibrary(config, serverKey(config), showIndicator = true)
+        loadServerLibrary(config, config.fingerprint, showIndicator = true)
     }
 
     private fun loadServerLibrary(config: SourceConfig, key: String, showIndicator: Boolean) {
+        serverLibraryJob?.cancel()
+        val generation = serverLibraryGeneration.incrementAndGet()
         // Kept on screen when the same server is being refreshed — including
         // after a playlist write invalidated it. The loading state is for a
         // first load, or for a genuinely different server's shelves.
@@ -3054,13 +3234,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_serverLibrary.value !is UiState.Success || (previousKey != null && previousKey != key)) {
             _serverLibrary.value = UiState.Loading
         }
-        serverLibraryLoading = true
         if (showIndicator) _serverLibraryRefreshing.value = true
-        viewModelScope.launch {
+        serverLibraryJob = viewModelScope.launch {
             try {
                 val library = SourceRegistry.instance(config.id) as? ServerLibrary
                 if (library == null) {
-                    _serverLibrary.value = UiState.Error(text(R.string.server_page_failed))
+                    if (serverLibraryGeneration.get() == generation) {
+                        _serverLibrary.value = UiState.Error(text(R.string.server_page_failed))
+                    }
                     return@launch
                 }
                 // Every shelf's own calls at once: the tab shows one spinner,
@@ -3144,16 +3325,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             ?.let { items -> HomeShelf(text(R.string.server_starred), items) },
                     )
                 }
+                if (serverLibraryGeneration.get() != generation) return@launch
                 _serverLibrary.value = UiState.Success(ServerLibraryPage(shelves))
                 serverLibraryKey = key
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 TrackLog.w("Rizumu", "server library failed: ${failure.message}")
-                _serverLibrary.value = UiState.Error(failure.message ?: text(R.string.server_page_failed))
+                if (serverLibraryGeneration.get() == generation) {
+                    _serverLibrary.value = UiState.Error(failure.message ?: text(R.string.server_page_failed))
+                }
             } finally {
-                serverLibraryLoading = false
-                if (showIndicator) _serverLibraryRefreshing.value = false
+                if (serverLibraryGeneration.get() == generation) {
+                    // As [loadServerHome]: cleared even when this job was not
+                    // the pull, because a pull it replaced was cancelled.
+                    _serverLibraryRefreshing.value = false
+                }
             }
         }
     }
@@ -3183,7 +3370,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Whether the open grid is still fetching the rest of its shelf. */
     val shelfCompleting: StateFlow<Boolean> = _shelfCompleting.asStateFlow()
 
+    /**
+     * Whether the open grid's list may still be missing cards.
+     *
+     * Set when the walk failed or stopped on its budget. The grid says so
+     * instead of "Nothing here matches" — a search that came up short over a
+     * partial list has not been shown to be exhaustive.
+     */
+    private val _shelfCompletionIncomplete = MutableStateFlow(false)
+    val shelfCompletionIncomplete: StateFlow<Boolean> = _shelfCompletionIncomplete.asStateFlow()
+
     private var shelfCompletionJob: Job? = null
+
+    /**
+     * Which completion owns the shared extras and progress state.
+     *
+     * Cancelling the old job is not a completion fence: the HTTP call inside
+     * it is blocking, so a cancelled walk can still reach its next line. Every
+     * append and every state write is checked against the current generation,
+     * so shelf A's late page cannot land in shelf B's grid.
+     */
+    private val shelfCompletionGeneration = AtomicLong(0L)
 
     /**
      * Fetches the rest of [shelf]'s list for the "Show all" grid it opened.
@@ -3201,7 +3408,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun completeShelf(shelf: HomeShelf) {
         shelfCompletionJob?.cancel()
         shelfCompletionJob = null
+        // Bumped before anything else, so a cancelled walk can no longer write
+        // even for a shelf that needs no completion at all.
+        val generation = shelfCompletionGeneration.incrementAndGet()
         _shelfExtras.value = emptyList()
+        _shelfCompletionIncomplete.value = false
         val completion = shelf.completion
         if (completion == null) {
             _shelfCompleting.value = false
@@ -3218,7 +3429,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // a prefix of this order — see [ServerLibrary.allAlbums]
                         // — and the merge drops whatever it already carried.
                         library.allAlbums(type = ServerAlbumListType.ALPHABETICAL_BY_NAME) { page ->
-                            appendShelfItems(page.map { it.toShelfItem(completion.configId) })
+                            appendShelfItems(page.map { it.toShelfItem(completion.configId) }, generation)
                         }
                     }
 
@@ -3227,42 +3438,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             ?: return@launch
                         // The artist list is not paged: one call already holds
                         // every artist, and the row's own picks dedupe out.
-                        appendShelfItems(library.artists().map { it.toShelfItem(completion.configId) })
+                        appendShelfItems(
+                            library.artists().map { it.toShelfItem(completion.configId) },
+                            generation,
+                        )
                     }
 
                     is ShelfCompletion.ServerGenres -> {
                         val library = SourceRegistry.instance(completion.configId) as? ServerLibrary
                             ?: return@launch
                         // The same order the row used: what this device plays
-                        // first, then the server's own order behind it.
+                        // first, then the server's own order behind it. The
+                        // whole refreshed list is appended, and the merge
+                        // dedupes by browse key — a positional drop would lose
+                        // a genre the affinity ranking promoted between the row
+                        // opening and the grid opening.
                         val affinity = runCatching { ListeningStats.genreAffinity() }
                             .getOrDefault(emptyMap())
                         val genres = library.genres()
                             .sortedByDescending { affinity[genreKey(it.name)] ?: 0L }
                         appendShelfItems(
-                            genres.drop(shelf.items.size).map { genre ->
+                            genres.map { genre ->
                                 genre.toShelfItem(
                                     completion.configId,
                                     serverDiscoveryArtwork.get(genre.genreBrowseKey(completion.configId)),
                                 )
                             },
+                            generation,
                         )
                     }
 
                     is ShelfCompletion.YoutubeShelf -> {
-                        YtMusicRepository.completeLibraryShelf(completion.browseId) { page ->
-                            appendShelfItems(page)
+                        // Seeded with the row's own cards and resumed from the
+                        // bounded load's token, so the preview pages are not
+                        // fetched a second time. A walk that stopped on its
+                        // budget is a partial list, and the grid says so
+                        // instead of claiming the search found nothing.
+                        val complete = YtMusicRepository.completeLibraryShelf(
+                            browseId = completion.browseId,
+                            knownKeys = shelf.items.map { it.shelfKey() },
+                            startToken = YtMusicRepository.libraryShelfContinuation(completion.browseId),
+                        ) { page ->
+                            appendShelfItems(page, generation)
                         }
+                        if (!complete) markShelfCompletionIncomplete(generation)
                     }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 // The grid keeps the preview it already had; a shelf that
-                // cannot be completed is still browsable.
+                // cannot be completed is still browsable, but it is not whole.
                 TrackLog.w("Rizumu", "shelf completion failed: ${failure.message}")
+                markShelfCompletionIncomplete(generation)
             } finally {
-                _shelfCompleting.value = false
+                if (shelfCompletionGeneration.get() == generation) {
+                    _shelfCompleting.value = false
+                }
             }
         }
     }
@@ -3271,12 +3503,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelShelfCompletion() {
         shelfCompletionJob?.cancel()
         shelfCompletionJob = null
+        shelfCompletionGeneration.incrementAndGet()
         _shelfExtras.value = emptyList()
         _shelfCompleting.value = false
+        _shelfCompletionIncomplete.value = false
     }
 
-    private fun appendShelfItems(items: List<ShelfItem>) {
+    private fun markShelfCompletionIncomplete(generation: Long) {
+        if (shelfCompletionGeneration.get() == generation) {
+            _shelfCompletionIncomplete.value = true
+        }
+    }
+
+    private fun appendShelfItems(items: List<ShelfItem>, generation: Long) {
         if (items.isEmpty()) return
+        if (shelfCompletionGeneration.get() != generation) return
         _shelfExtras.update { current ->
             (current + items).distinctBy { item -> item.shelfKey() }
         }
@@ -3421,14 +3662,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * before offering to queue what is behind it — an artist is not a running
      * order, so it gets no queue actions.
      */
-    fun browseTypeOf(browseId: String, fallback: BrowseType = BrowseType.OTHER): BrowseType = when {
-        // Not one of YouTube's, and the only one of these that says outright what
-        // it is rather than being read off a prefix convention.
-        browseId.startsWith(Downloads.PLAYLIST_PREFIX) -> BrowseType.PLAYLIST
-        browseId.startsWith("UC") -> BrowseType.ARTIST
-        browseId.startsWith("MPREb") -> BrowseType.ALBUM
-        browseId.startsWith("VL") || browseId.startsWith("PL") -> BrowseType.PLAYLIST
-        else -> fallback
+    fun browseTypeOf(browseId: String, fallback: BrowseType = BrowseType.OTHER): BrowseType {
+        // A configured server's own pages name their kind outright, rather
+        // than being read off a prefix convention like YouTube's. Checked
+        // first so a server playlist is recorded as one — the download
+        // metadata and the long-press menu both depend on it.
+        SourceRegistry.parseBrowseKey(browseId)?.let { ref ->
+            return when (ref.kind) {
+                ServerBrowseKind.ALBUM -> BrowseType.ALBUM
+                ServerBrowseKind.ARTIST -> BrowseType.ARTIST
+                ServerBrowseKind.PLAYLIST -> BrowseType.PLAYLIST
+                ServerBrowseKind.SERVER,
+                ServerBrowseKind.GENRE,
+                ServerBrowseKind.DECADE,
+                ServerBrowseKind.STARRED,
+                -> BrowseType.OTHER
+            }
+        }
+        return when {
+            // Not one of YouTube's, and the only one of these that says outright what
+            // it is rather than being read off a prefix convention.
+            browseId.startsWith(Downloads.PLAYLIST_PREFIX) -> BrowseType.PLAYLIST
+            browseId.startsWith("UC") -> BrowseType.ARTIST
+            browseId.startsWith("MPREb") -> BrowseType.ALBUM
+            browseId.startsWith("VL") || browseId.startsWith("PL") -> BrowseType.PLAYLIST
+            else -> fallback
+        }
     }
 
     /**
@@ -3467,6 +3726,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     LocalMediaRepository.getLocalMusic(context)
                         .ifEmpty { error(text(R.string.no_local_audio_found)) }
+                }
+                // A page on a configured server is answered by that server —
+                // handing a `srcb:` id to YouTube would ask about something it
+                // has never heard of. An artist page is a selection, not a
+                // running order, so it contributes its top songs, the same
+                // policy the queue actions use everywhere else; see
+                // [serverBrowseSongs].
+                SourceRegistry.parseBrowseKey(browseId) != null -> runCatching {
+                    serverBrowseSongs(browseId).ifEmpty { error(text(R.string.no_tracks_here)) }
                 }
                 else -> YtMusicRepository.allSongs(browseId)
             }

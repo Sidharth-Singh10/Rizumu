@@ -66,6 +66,7 @@ import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Upgrade
 import androidx.compose.material3.DropdownMenu
@@ -129,6 +130,7 @@ import com.music.rizumu.data.model.SearchFilter
 import com.music.rizumu.data.model.SearchResult
 import com.music.rizumu.data.model.ServerHomePage
 import com.music.rizumu.data.model.ShelfItem
+import com.music.rizumu.data.model.shelfIdentity
 import com.music.rizumu.data.model.shelfKey
 import com.music.rizumu.data.model.Song
 import com.music.rizumu.data.model.UiState
@@ -635,12 +637,21 @@ private fun RizumuApp(
         libraryShowAll = null
         viewModel.clearDetail()
         webSession = null
+        // Listen Together is a Google-account surface, and server mode hides
+        // it; the invite is still consumed so it does not spring open a page
+        // the mode says is not there.
+        if (AppSettings.primaryLibrary.value == PrimaryLibrary.SERVER) {
+            JamInviteLink.handled()
+            return@LaunchedEffect
+        }
         showSettings = true
         showListenTogether = true
         JamInviteLink.handled()
     }
     LaunchedEffect(signedIn, activeJamInviteCode) {
-        if (signedIn && activeJamInviteCode != null) {
+        if (signedIn && activeJamInviteCode != null &&
+            AppSettings.primaryLibrary.value != PrimaryLibrary.SERVER
+        ) {
             showSettings = true
             showListenTogether = true
         }
@@ -689,20 +700,45 @@ private fun RizumuApp(
     val serverHomeRefreshing by viewModel.serverHomeRefreshing.collectAsStateWithLifecycle()
     val serverLibrary by viewModel.serverLibrary.collectAsStateWithLifecycle()
     val serverLibraryRefreshing by viewModel.serverLibraryRefreshing.collectAsStateWithLifecycle()
+    // Which server playlists this account may rename or delete, and the last
+    // write that failed — the sheet offers the destructive rows only when the
+    // first says yes, and the second is shown once as a toast.
+    val serverPlaylistOwned by viewModel.serverPlaylistOwned.collectAsStateWithLifecycle()
+    val serverActionError by viewModel.serverActionError.collectAsStateWithLifecycle()
+    LaunchedEffect(serverActionError) {
+        serverActionError?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            viewModel.clearServerActionError()
+        }
+    }
     // The rest of an open "Show all" grid, fetched while it is on screen — see
     // MainViewModel.completeShelf.
     val shelfExtras by viewModel.shelfExtras.collectAsStateWithLifecycle()
     val shelfCompleting by viewModel.shelfCompleting.collectAsStateWithLifecycle()
+    val shelfCompletionIncomplete by viewModel.shelfCompletionIncomplete.collectAsStateWithLifecycle()
     val sourceConfigs by SourceRegistry.configs.collectAsStateWithLifecycle()
     // Changes when the server the primary-library screens read from changes:
     // a different first server, one switched off, one edited. The refresh
     // effects key on this rather than on the mode alone.
+    // The full config, not id and address alone: changing the account, auth
+    // mode, quality or label is just as much a different server to talk to,
+    // and the pages loaded under the old settings must be reloaded.
     val serverKey = remember(sourceConfigs) {
         sourceConfigs
             .filter { it.kind == SourceKind.SUBSONIC && it.enabled && it.isComplete }
-            .joinToString { "${it.id}@${it.baseUrl}" }
+            .joinToString { it.fingerprint }
     }
     val serverMode = primaryLibrary == PrimaryLibrary.SERVER
+    // A "Show all" grid is a snapshot of the shelf it was opened from. When
+    // the server page behind it reloads — a playlist write, a pull — the open
+    // grid takes the fresh shelf, so it does not keep showing a playlist the
+    // server no longer lists.
+    LaunchedEffect(serverLibrary, libraryShowAll) {
+        val open = libraryShowAll ?: return@LaunchedEffect
+        val page = (serverLibrary as? UiState.Success)?.data ?: return@LaunchedEffect
+        val fresh = page.shelves.firstOrNull { it.shelfIdentity() == open.shelfIdentity() }
+        if (fresh != null && fresh != open) libraryShowAll = fresh
+    }
     // Which tabs the bar shows, and in which order. Server mode has no
     // Explore: that tab is YouTube's editorial front page, and in server mode
     // YouTube is a fallback rather than somewhere to browse.
@@ -862,12 +898,20 @@ private fun RizumuApp(
     }
 
     // In server mode both tabs are server pages with their own pull states, and
-    // the top-bar indicator has to follow the one actually on screen.
+    // the top-bar indicator has to follow the one actually on screen — both
+    // its drag fraction and its progress line.
     val currentPull = when (currentFeed) {
         MainViewModel.Feed.HOME -> if (serverMode) serverHomePull else homePull
         MainViewModel.Feed.EXPLORE -> explorePull
         MainViewModel.Feed.LIBRARY -> if (serverMode) serverLibraryPull else libraryPull
         null -> null
+    }
+    val topBarRefreshing = when (currentFeed) {
+        MainViewModel.Feed.HOME -> if (serverMode) serverHomeRefreshing else MainViewModel.Feed.HOME in refreshing
+        MainViewModel.Feed.EXPLORE -> MainViewModel.Feed.EXPLORE in refreshing
+        MainViewModel.Feed.LIBRARY ->
+            if (serverMode) serverLibraryRefreshing else MainViewModel.Feed.LIBRARY in refreshing
+        null -> false
     }
     val scrolled by remember(currentListState) {
         derivedStateOf {
@@ -1407,7 +1451,11 @@ private fun RizumuApp(
      * downstream read.
      */
     val shelfSong: (ShelfItem) -> Song? = { item ->
-        item.videoId?.let { videoId ->
+        // A server card carries the row it was built from, with the album and
+        // artist ids the long-press actions route with; rebuilding from the
+        // display fields alone would lose them. YouTube cards carry no Song —
+        // their ids are whole in the video id — so the credit parser stays.
+        item.song ?: item.videoId?.let { videoId ->
             Song(
                 videoId = videoId,
                 title = item.title,
@@ -1444,12 +1492,25 @@ private fun RizumuApp(
      * catalogue is not what the card was about.
      */
     val serverCardClick: (ShelfItem) -> Unit = { item ->
-        val videoId = item.videoId
+        // The row the card was built from, when there is one: a server track
+        // carries its album/artist ids and genre, and rebuilding the Song from
+        // the display fields alone would lose the navigation behind the long
+        // press and the source the queue files it under.
+        val stored = item.song
         when {
-            videoId != null -> playFrom(
+            stored != null -> playFrom(
+                listOf(stored),
+                0,
+                QueueSource(
+                    stored.albumName ?: item.title,
+                    PlaybackSourceType.BROWSE,
+                    stored.albumId,
+                ),
+            )
+            item.videoId != null -> playFrom(
                 listOf(
                     Song(
-                        videoId = videoId,
+                        videoId = item.videoId,
                         title = item.title,
                         artist = item.subtitle,
                         thumbnailUrl = item.thumbnailUrl,
@@ -2031,7 +2092,11 @@ private fun RizumuApp(
                     }
                     PlaybackSourceType.HISTORY -> showHistory = true
                     PlaybackSourceType.REPLAY -> showReplay = true
-                    PlaybackSourceType.EXPLORE -> selectedTab = TAB_EXPLORE
+                    // Explore is hidden in server mode — the tab is gone from
+                    // the bar — so a track queued from it before the mode
+                    // changed lands on Home rather than on a screen with no
+                    // way back to itself.
+                    PlaybackSourceType.EXPLORE -> selectedTab = if (serverMode) TAB_HOME else TAB_EXPLORE
                     PlaybackSourceType.SHARED_LINK -> {
                         val id = sourceId ?: return@openSource
                         context.startActivity(
@@ -2052,14 +2117,19 @@ private fun RizumuApp(
             onDismissLyricsOffset = { showLyricsOffset = false },
             docked = docked,
             onListenTogether = {
-                // A phone's player is a sheet over the page, so it has to come
-                // down for the page to be read at all. A tablet's is a pane
-                // beside it: the settings page opens in the half that is
-                // already free, and taking the player away would be closing
-                // something nobody asked to close.
-                if (!docked) showNowPlaying = false
-                showSettings = true
-                showListenTogether = true
+                // Hidden in server mode, the same as its Settings row: it is a
+                // Google-account surface, and the mode's boundary is that the
+                // server is the library. The player simply does not open it.
+                if (!serverMode) {
+                    // A phone's player is a sheet over the page, so it has to come
+                    // down for the page to be read at all. A tablet's is a pane
+                    // beside it: the settings page opens in the half that is
+                    // already free, and taking the player away would be closing
+                    // something nobody asked to close.
+                    if (!docked) showNowPlaying = false
+                    showSettings = true
+                    showListenTogether = true
+                }
             },
             onClearQueue = {
                 // Keep what's playing; drop everything queued after it.
@@ -2279,6 +2349,7 @@ private fun RizumuApp(
                             LibraryGridPage(
                                 shelf = merged,
                                 completing = shelfCompleting,
+                                incomplete = shelfCompletionIncomplete,
                                 gridState = libraryShowAllGridState,
                                 // Which page opened this grid decides who
                                 // handles its cards: a server row's cards carry
@@ -2784,27 +2855,40 @@ private fun RizumuApp(
                             // The server library, in the shape the YouTube one
                             // has: shelves of the listener's own playlists,
                             // albums, artists and starred items. Loaded by the
-                            // feed effect when this tab becomes current.
-                            ServerLibraryScreen(
-                                state = serverLibrary,
-                                listState = libraryListState,
-                                onItemClick = { item ->
-                                    item.browseId?.let { id ->
-                                        viewModel.openDetail(
-                                            browseId = id,
-                                            title = item.title,
-                                            subtitle = item.subtitle,
-                                            thumbnailUrl = item.thumbnailUrl,
-                                        )
-                                    }
-                                },
-                                onItemLongPress = onBrowseLongPress,
-                                onShowAll = serverShowAll,
-                                refreshing = serverLibraryRefreshing,
-                                pullState = serverLibraryPull,
-                                onRefresh = viewModel::refreshServerLibrary,
-                                contentPadding = listPadding,
-                            )
+                            // feed effect when this tab becomes current. With
+                            // no server configured there is nothing to retry,
+                            // so the tab offers the way to add one instead of
+                            // a Retry that can only fail again.
+                            if (serverKey.isEmpty()) {
+                                ServerHomeEmpty(
+                                    contentPadding = listPadding,
+                                    onAddServer = {
+                                        showSources = true
+                                        editingSource = SourceConfig(kind = SourceKind.SUBSONIC)
+                                    },
+                                )
+                            } else {
+                                ServerLibraryScreen(
+                                    state = serverLibrary,
+                                    listState = libraryListState,
+                                    onItemClick = { item ->
+                                        item.browseId?.let { id ->
+                                            viewModel.openDetail(
+                                                browseId = id,
+                                                title = item.title,
+                                                subtitle = item.subtitle,
+                                                thumbnailUrl = item.thumbnailUrl,
+                                            )
+                                        }
+                                    },
+                                    onItemLongPress = onBrowseLongPress,
+                                    onShowAll = serverShowAll,
+                                    refreshing = serverLibraryRefreshing,
+                                    pullState = serverLibraryPull,
+                                    onRefresh = viewModel::refreshServerLibrary,
+                                    contentPadding = listPadding,
+                                )
+                            }
                         } else {
                             LibraryScreen(
                             signedIn = signedIn,
@@ -2899,7 +2983,7 @@ private fun RizumuApp(
                         detail != null -> detailScrolled
                         else -> scrolled || selectedTab == TAB_SEARCH
                     },
-                    refreshing = currentFeed != null && currentFeed in refreshing,
+                    refreshing = topBarRefreshing,
                     pullFraction = { currentPull?.distanceFraction ?: 0f },
                     onBack = when {
                         showDiscord -> ({ showDiscord = false })
@@ -3028,6 +3112,25 @@ private fun RizumuApp(
                                     },
                                     onSwipeProfile = { forward -> viewModel.stepProfile(forward) },
                                 )
+                            } else if (
+                                detail == null && libraryShowAll == null &&
+                                !showSources && !showListenTogether && !showEqualizer &&
+                                !showHistory && !showReplay && !showDiscord
+                            ) {
+                                // The gear takes the avatar's place in server
+                                // mode, because hiding the avatar also hid the
+                                // only way into Settings — and a server that
+                                // needs editing (the plain-HTTP opt-in, a
+                                // changed address) must not be a dead end. At
+                                // the root of a tab only: over a page or an
+                                // overlay there is something to go back to.
+                                IconButton(onClick = { showSettings = true }) {
+                                    Icon(
+                                        Icons.Rounded.Settings,
+                                        contentDescription = stringResource(R.string.settings),
+                                        tint = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
                             }
                         }
                     },
@@ -3254,10 +3357,22 @@ private fun RizumuApp(
                 ?.takeIf { !fromPlayer && song.setVideoId != null }
             // A server playlist page is editable the same way: the row's track
             // key names the song the server knows, and a removal is one
-            // updatePlaylist call.
+            // updatePlaylist call — but only once the server has said this
+            // account may manage that playlist.
+            LaunchedEffect(song.videoId, detail?.browseId) {
+                detail?.browseId
+                    ?.let { SourceRegistry.parseBrowseKey(it) }
+                    ?.takeIf { it.kind == ServerBrowseKind.PLAYLIST }
+                    ?.let { viewModel.resolveServerPlaylistOwnership(it) }
+            }
             val serverEditable = detail?.browseId
                 ?.let { SourceRegistry.parseBrowseKey(it) }
-                ?.takeIf { it.kind == ServerBrowseKind.PLAYLIST && !fromPlayer }
+                ?.takeIf {
+                    it.kind == ServerBrowseKind.PLAYLIST && !fromPlayer &&
+                        serverPlaylistOwned[
+                            SourceRegistry.browseKey(it.configId, ServerBrowseKind.PLAYLIST, it.id),
+                        ] == true
+                }
             ModalBottomSheet(
                 onDismissRequest = { songActions = null },
                 // The sheet paints itself in the track's own colours, corners
@@ -3567,8 +3682,21 @@ private fun RizumuApp(
             // Rename and Delete are absent until the answer says they apply, so
             // the sheet's worst moment is a beat without them on the user's own
             // playlist, rather than offering to delete a stranger's.
+            val remote = target.browseId?.startsWith("local:") == false
+            // A page on a configured server is remote, but nothing about it is
+            // YouTube's: no share link to build, and nothing to pin into the
+            // Library tab, which lists YouTube playlists by their own ids.
+            val serverPage = target.browseId?.startsWith("srcb:") == true
+            val serverPlaylistRef = target.browseId
+                ?.let { SourceRegistry.parseBrowseKey(it) }
+                ?.takeIf { it.kind == ServerBrowseKind.PLAYLIST }
             LaunchedEffect(target.browseId) {
                 viewModel.resolvePlaylistOwnership(target.browseId)
+                // Whose playlist a server page is, asked from the server that
+                // owns it. Rename and Delete stay absent until the answer says
+                // this account may manage it — a shared or public playlist
+                // must not be offered a write that would only be refused.
+                serverPlaylistRef?.let { viewModel.resolveServerPlaylistOwnership(it) }
             }
             // Spelt out here rather than left to MainViewModel.editablePlaylist,
             // which is the same rule over the same two lists: that reads them as
@@ -3579,14 +3707,12 @@ private fun RizumuApp(
             val playlist = target.browseId
                 ?.takeIf { signedIn && ownedPlaylists[it] == true }
                 ?.let { id -> playlists.firstOrNull { it.browseId == id } }
-            val remote = target.browseId?.startsWith("local:") == false
-            // A page on a configured server is remote, but nothing about it is
-            // YouTube's: no share link to build, and nothing to pin into the
-            // Library tab, which lists YouTube playlists by their own ids.
-            val serverPage = target.browseId?.startsWith("srcb:") == true
-            val serverPlaylistRef = target.browseId
-                ?.let { SourceRegistry.parseBrowseKey(it) }
-                ?.takeIf { it.kind == ServerBrowseKind.PLAYLIST }
+            val canManageServerPlaylist = serverPlaylistRef
+                ?.let {
+                    serverPlaylistOwned[
+                        SourceRegistry.browseKey(it.configId, ServerBrowseKind.PLAYLIST, it.id),
+                    ] == true
+                } == true
             val pinnedPlaylists by AppSettings.pinnedPlaylists.collectAsStateWithLifecycle()
             val pinnableId = target.browseId
                 ?.takeIf { target.type == BrowseType.PLAYLIST && !serverPage }
@@ -3692,7 +3818,7 @@ private fun RizumuApp(
                             browseActions = null
                             viewModel.renamePlaylist(p, name)
                         }
-                    } ?: serverPlaylistRef?.let { ref ->
+                    } ?: serverPlaylistRef?.takeIf { canManageServerPlaylist }?.let { ref ->
                         { name: String ->
                             browseActions = null
                             viewModel.renameServerPlaylist(ref, name)
@@ -3703,7 +3829,7 @@ private fun RizumuApp(
                             browseActions = null
                             viewModel.deletePlaylist(p)
                         }
-                    } ?: serverPlaylistRef?.let { ref ->
+                    } ?: serverPlaylistRef?.takeIf { canManageServerPlaylist }?.let { ref ->
                         {
                             browseActions = null
                             viewModel.deleteServerPlaylist(ref)
