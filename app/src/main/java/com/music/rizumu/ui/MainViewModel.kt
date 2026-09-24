@@ -3107,9 +3107,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         playlists.await().takeIf { it.isNotEmpty() }
                             ?.let { list -> HomeShelf(text(R.string.playlists), list.map { it.toShelfItem(config.id) }) },
                         yourArtists.takeIf { it.isNotEmpty() }
-                            ?.let { list -> HomeShelf(text(R.string.your_artists), list.map { it.toShelfItem(config.id) }) },
+                            ?.let { list ->
+                                HomeShelf(
+                                    title = text(R.string.your_artists),
+                                    items = list.map { it.toShelfItem(config.id) },
+                                    // The row is what play history picked; the
+                                    // grid can hold every artist — see
+                                    // [completeShelf].
+                                    completion = ShelfCompletion.ServerArtists(config.id),
+                                )
+                            },
                         mostPlayed.takeIf { it.isNotEmpty() }
-                            ?.let { list -> HomeShelf(text(R.string.your_albums), list.map { it.toShelfItem(config.id) }) },
+                            ?.let { list ->
+                                HomeShelf(
+                                    title = text(R.string.your_albums),
+                                    items = list.map { it.toShelfItem(config.id) },
+                                    // As above: most played first, then the
+                                    // rest of the catalogue.
+                                    completion = ShelfCompletion.ServerAlbums(config.id),
+                                )
+                            },
                         alphabetical.await().takeIf { it.isNotEmpty() }
                             ?.let { list ->
                                 HomeShelf(
@@ -3197,12 +3214,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     is ShelfCompletion.ServerAlbums -> {
                         val library = SourceRegistry.instance(completion.configId) as? ServerLibrary
                             ?: return@launch
-                        library.allAlbums(
-                            type = ServerAlbumListType.ALPHABETICAL_BY_NAME,
-                            from = shelf.items.size,
-                        ) { page ->
+                        // From the start: the row may be a selection rather than
+                        // a prefix of this order — see [ServerLibrary.allAlbums]
+                        // — and the merge drops whatever it already carried.
+                        library.allAlbums(type = ServerAlbumListType.ALPHABETICAL_BY_NAME) { page ->
                             appendShelfItems(page.map { it.toShelfItem(completion.configId) })
                         }
+                    }
+
+                    is ShelfCompletion.ServerArtists -> {
+                        val library = SourceRegistry.instance(completion.configId) as? ServerLibrary
+                            ?: return@launch
+                        // The artist list is not paged: one call already holds
+                        // every artist, and the row's own picks dedupe out.
+                        appendShelfItems(library.artists().map { it.toShelfItem(completion.configId) })
                     }
 
                     is ShelfCompletion.ServerGenres -> {

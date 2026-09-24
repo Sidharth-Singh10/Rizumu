@@ -535,15 +535,6 @@ class SubsonicSourceTest {
     }
 
     @Test
-    fun `allAlbums starts where the preview ended`() = runBlocking {
-        route("/rest/getAlbumList2", ok())
-
-        source().allAlbums(ServerAlbumListType.ALPHABETICAL_BY_NAME, from = 100) { }
-
-        assertEquals("100", seen.single().requestUrl?.queryParameter("offset"))
-    }
-
-    @Test
     fun `starring a song reaches the server`() = runBlocking {
         route("/rest/star", ok())
         route("/rest/unstar", ok())

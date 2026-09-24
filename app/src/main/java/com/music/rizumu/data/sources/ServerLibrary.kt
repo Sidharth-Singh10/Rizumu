@@ -51,19 +51,22 @@ interface ServerLibrary {
     ): List<ServerAlbum>
 
     /**
-     * Every album of [type], a page at a time, starting at [from] and stopping
-     * when the server runs out.
+     * Every album of [type], a page at a time, until the server has no more.
      *
      * The endpoint answers at most 500 rows and takes an offset, so a
      * catalogue larger than one page is walked rather than asked for in a
-     * single call. [onPage] is invoked with each page as it arrives and in
-     * order, so a caller can let the list grow on screen — this is how a
-     * "Show all" page comes to hold the whole catalogue, which is what makes
-     * the search over it exhaustive.
+     * single call. The walk starts at the beginning and lets the caller drop
+     * what it already had, which is what makes it safe for a shelf that is a
+     * selection rather than a prefix — a "most played" row, say — where
+     * starting part-way in would skip albums the selection does not hold.
+     *
+     * [onPage] is invoked with each page as it arrives and in order, so a
+     * caller can let the list grow on screen — this is how a "Show all" page
+     * comes to hold the whole catalogue, which is what makes the search over
+     * it exhaustive.
      */
     suspend fun allAlbums(
         type: ServerAlbumListType,
-        from: Int = 0,
         onPage: suspend (List<ServerAlbum>) -> Unit,
     )
 

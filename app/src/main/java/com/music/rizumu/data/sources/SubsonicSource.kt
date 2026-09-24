@@ -158,10 +158,9 @@ class SubsonicSource(
 
     override suspend fun allAlbums(
         type: ServerAlbumListType,
-        from: Int,
         onPage: suspend (List<ServerAlbum>) -> Unit,
     ) = withContext(Dispatchers.IO) {
-        var offset = from.coerceAtLeast(0)
+        var offset = 0
         var pages = 0
         while (pages < MAX_ALBUM_PAGES) {
             val page = client.albums(type.wire, offset, ALBUM_PAGE).map { it.toServerAlbum() }

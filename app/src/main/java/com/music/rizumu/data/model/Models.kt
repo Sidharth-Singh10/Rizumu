@@ -301,6 +301,9 @@ sealed interface ShelfCompletion {
     /** Every album the server holds, in the alphabetical order the shelf keeps. */
     data class ServerAlbums(val configId: String) : ShelfCompletion
 
+    /** Every artist the server holds, beyond a row's own selection. */
+    data class ServerArtists(val configId: String) : ShelfCompletion
+
     /** Every genre the server holds; the row only previews the first few. */
     data class ServerGenres(val configId: String) : ShelfCompletion
 
