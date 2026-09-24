@@ -171,6 +171,26 @@ class SubsonicSourceTest {
         assertTrue(source().search("teardrop", 25, waitForAll = false).isEmpty())
     }
 
+    @Test
+    fun `a starred search hit arrives liked, an unstarred one does not`() = runBlocking {
+        route(
+            "/rest/search3",
+            ok(
+                ""","searchResult3":{"song":[""" +
+                    """{"id":"300","title":"Teardrop","artist":"Massive Attack","duration":330,"starred":"2024-01-01T00:00:00Z"},""" +
+                    """{"id":"301","title":"Angel","artist":"Massive Attack","duration":384}]}""",
+            ),
+        )
+
+        val songs = source().search("teardrop", 25, waitForAll = false)
+
+        // Search is a list like any other, and a star the server reported on
+        // its row has to arrive with the row: a track that reads as unliked
+        // here can be told to unstar itself on the next tap.
+        assertTrue(ServerLikeState.isStarred(songs[0].videoId))
+        assertFalse(ServerLikeState.isStarred(songs[1].videoId))
+    }
+
     // ── Stream ────────────────────────────────────────────────────────────
 
     @Test

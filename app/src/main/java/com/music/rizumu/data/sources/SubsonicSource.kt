@@ -127,11 +127,8 @@ class SubsonicSource(
             found.song.asSequence()
                 .filter { it.id.isNotBlank() && it.title.isNotBlank() }
                 .take(limit)
-                .map { song ->
-                    rows[song.id] = song
-                    song.toSong()
-                }
                 .toList()
+                .toSongs()
         }
 
     // ── Browse ────────────────────────────────────────────────────────────
