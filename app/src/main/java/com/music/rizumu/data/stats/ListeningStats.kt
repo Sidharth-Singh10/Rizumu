@@ -146,6 +146,7 @@ object ListeningStats {
                     albumId = song.albumId,
                     artistId = song.artistId,
                     art = song.thumbnailUrl,
+                    genre = song.genre,
                 )
             }
             track.ms += playedMs
@@ -157,6 +158,7 @@ object ListeningStats {
             if (track.albumId == null) track.albumId = song.albumId
             if (track.artistId == null) track.artistId = song.artistId
             if (track.art == null) track.art = song.thumbnailUrl
+            if (track.genre == null) track.genre = song.genre
             if (countsAsPlay) track.plays++
 
             // The lead artist, not the credit as a string. A track billed
@@ -338,6 +340,33 @@ object ListeningStats {
                 }
             }
             recentTracksFor(merged.values, configId, limit)
+        }
+
+    /**
+     * How much this device has listened to each genre, in milliseconds.
+     *
+     * Read from the newest [GENRE_MONTHS] months, like [recentTracks] and for
+     * the same reason: a genre ranking is about taste, taste moves slowly, and
+     * a year of it is enough to order a row without parsing three years of
+     * history to do it. A play recorded before the track's genre was known
+     * contributes nothing until the track is played again, which is the only
+     * way the answer ever fills in.
+     *
+     * Keyed by [genreKey], because a server's genre list and its song rows do
+     * not always spell a tag the same way.
+     */
+    suspend fun genreAffinity(months: Int = GENRE_MONTHS): Map<String, Long> =
+        withContext(Dispatchers.IO) {
+            flushAndAwait()
+            val merged = LinkedHashMap<String, TrackEntry>()
+            months().asReversed().take(months).forEach { month ->
+                read(month.toString())?.tracks?.forEach { entry ->
+                    merged.merge(entry.id, entry) { existing, older ->
+                        existing.copy().also { it.absorb(older) }
+                    }
+                }
+            }
+            genreAffinityFor(merged.values)
         }
 
     private fun read(key: String): StoredBucket? {
@@ -688,6 +717,16 @@ object ListeningStats {
     private const val RECENT_MONTHS = 3
 
     /**
+     * How many months [genreAffinity] reads back.
+     *
+     * Longer than [RECENT_MONTHS] because it answers a slower question: what
+     * someone listens to as a taste, not what they put on this week. A year
+     * covers a genre that comes round with a season without reaching back
+     * through a listening history that has been reset or abandoned.
+     */
+    private const val GENRE_MONTHS = 12
+
+    /**
      * Per-month caps. Generous enough that nobody reaches them by listening,
      * tight enough that a bucket stays well under a hundred kilobytes.
      */
@@ -708,6 +747,15 @@ data class TrackEntry(
     var ms: Long = 0L,
     var plays: Int = 0,
     var last: Long = 0L,
+    /**
+     * The genre the source tagged this track with, where it did.
+     *
+     * Recorded with the play rather than looked up later: the row is gone by
+     * then, and this is what the Play tab's genre row is ordered by. Null on
+     * every entry recorded before this field existed, and on tracks whose
+     * source names no genre; both fill in when the track is played again.
+     */
+    var genre: String? = null,
 ) {
     fun absorb(other: TrackEntry) {
         ms += other.ms
@@ -717,6 +765,7 @@ data class TrackEntry(
         if (albumId == null) albumId = other.albumId
         if (artistId == null) artistId = other.artistId
         if (art == null) art = other.art
+        if (genre == null) genre = other.genre
     }
 }
 
@@ -737,6 +786,41 @@ internal fun recentTracksFor(
     .sortedByDescending { it.last }
     .take(limit)
     .toList()
+
+/**
+ * Listening time per genre, keyed by [genreKey].
+ *
+ * The pure half of [ListeningStats.genreAffinity], kept out of the object so
+ * the rule that turns a pile of played tracks into a genre ranking is a test
+ * rather than something only reachable through a device's listening history.
+ * Tracks whose source named no genre carry nothing and are skipped, as are
+ * entries with no time on them — a track can be recorded as played before a
+ * single sample of listening has been counted.
+ */
+internal fun genreAffinityFor(tracks: Collection<TrackEntry>): Map<String, Long> {
+    val totals = LinkedHashMap<String, Long>()
+    tracks.forEach { track ->
+        if (track.ms <= 0) return@forEach
+        val genre = track.genre?.takeIf { it.isNotBlank() } ?: return@forEach
+        val key = genreKey(genre)
+        if (key.isEmpty()) return@forEach
+        totals[key] = (totals[key] ?: 0L) + track.ms
+    }
+    return totals
+}
+
+/**
+ * A genre name reduced to what two spellings of it agree on.
+ *
+ * Both sides of the comparison are the server's own strings, but nothing makes
+ * a server spell them identically: `Trip-Hop` in its genre list and `trip hop`
+ * on a song row are one genre, and reading them as two would split a
+ * listener's time between them and leave both looking half as liked. Case and
+ * punctuation are the whole of the difference this is built for, so letters
+ * and digits are all that survive.
+ */
+internal fun genreKey(name: String): String =
+    name.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
 
 /**
  * One artist's or album's totals.

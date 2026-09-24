@@ -379,6 +379,25 @@ class SubsonicSourceTest {
     }
 
     @Test
+    fun `a song row's genre reaches the app's own model`() = runBlocking {
+        route(
+            "/rest/getAlbum",
+            ok(
+                ""","album":{"id":"al-12","name":"Mezzanine","artist":"Massive Attack","songCount":2,"song":[""" +
+                    """{"id":"300","title":"Teardrop","artist":"Massive Attack","duration":330,"genre":"Trip-Hop"},""" +
+                    """{"id":"301","title":"Angel","artist":"Massive Attack","duration":400,"genre":"  "}]}""",
+            ),
+        )
+
+        val songs = source().album("al-12")!!.songs
+
+        // The Play tab's genre row is ordered by these, so a blank tag has to
+        // read as "the server did not say" rather than as a genre of its own.
+        assertEquals("Trip-Hop", songs.first { it.videoId.endsWith("300") }.genre)
+        assertNull(songs.first { it.videoId.endsWith("301") }.genre)
+    }
+
+    @Test
     fun `a row the server no longer holds is a null page`() = runBlocking {
         route("/rest/getAlbum", failure(70, "Not found"))
         assertNull(source().album("gone"))

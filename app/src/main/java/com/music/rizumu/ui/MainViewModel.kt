@@ -86,6 +86,7 @@ import com.music.rizumu.data.sources.TrackMatcher
 import com.music.rizumu.data.sources.playedArtists
 import com.music.rizumu.data.stats.ListeningStats
 import com.music.rizumu.data.stats.TrackEntry
+import com.music.rizumu.data.stats.genreKey
 import com.music.rizumu.playback.StreamChoice
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -2854,7 +2855,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // fill resolved and gain a representative release cover just after the
         // page is up; see [fillServerDiscoveryArtwork]. Until then the card
         // draws its fallback tile.
+        // Ordered by what this device actually listens to where that is known:
+        // the genre a track was tagged with is recorded with the play, so a
+        // year of history is a real ranking rather than a guess. Genres nobody
+        // has played keep the server's own order behind the ones that were —
+        // the sort is stable — and a failure to read the history leaves the
+        // row exactly as it was before.
+        val affinity = runCatching { ListeningStats.genreAffinity() }.getOrDefault(emptyMap())
         val genres = runCatching { library.genres() }.getOrDefault(emptyList())
+            .sortedByDescending { affinity[genreKey(it.name)] ?: 0L }
         if (genres.isNotEmpty()) {
             shelves += HomeShelf(
                 title = text(R.string.genres),

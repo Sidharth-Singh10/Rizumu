@@ -83,6 +83,15 @@ data class Song(
     val playbackSourceType: PlaybackSourceType? = null,
     /** Browse id for an album, playlist, or other source page. */
     val playbackSourceId: String? = null,
+    /**
+     * The genre the source tags this track with, where it says.
+     *
+     * Carried on the row because it is what the local listening history files a
+     * play under — see [com.music.rizumu.data.stats.ListeningStats.genreAffinity]
+     * — and it cannot be recovered afterwards: the row is long gone by the time
+     * the Play tab asks which genres this device actually listens to.
+     */
+    val genre: String? = null,
 )
 
 /**

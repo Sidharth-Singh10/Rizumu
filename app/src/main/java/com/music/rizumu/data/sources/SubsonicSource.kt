@@ -426,6 +426,10 @@ class SubsonicSource(
             ?.let { SourceRegistry.browseKey(config.id, ServerBrowseKind.ALBUM, it) },
         artistId = artistId.takeIf { it.isNotBlank() }
             ?.let { SourceRegistry.browseKey(config.id, ServerBrowseKind.ARTIST, it) },
+        // The server's own tag for the recording. Carried so a play can be
+        // filed under it locally — see `ListeningStats.genreAffinity` — which
+        // is what orders the Play tab's genre row by what is actually played.
+        genre = genre.takeIf { it.isNotBlank() },
     )
 
     private companion object {
