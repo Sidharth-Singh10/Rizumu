@@ -2142,8 +2142,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
          */
         const val SERVER_SHUFFLE_SONGS = 500
 
-        /** The decade ranges the Play tab offers, as `1960-1969` ids. */
-        val DECADES: List<String> = (1960..2020 step 10).map { "$it-${it + 9}" }
+        /** The decade ranges the Play tab offers, newest first, as `2020-2029` ids. */
+        val DECADES: List<String> = (2020 downTo 1960 step 10).map { "$it-${it + 9}" }
 
         /** How many discovery covers the Play tab resolves at once. */
         const val SERVER_ARTWORK_FETCHES = 4
