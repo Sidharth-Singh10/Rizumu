@@ -52,6 +52,7 @@ class SubsonicSource(
         username = config.username,
         password = config.password,
         authMode = config.authMode,
+        allowInsecureHttp = config.allowInsecureHttp,
     )
 
     /**
@@ -324,6 +325,11 @@ class SubsonicSource(
                 rung = AppSettings.effectiveAudioQuality,
             )
             val url = try {
+                // A restored queue reaches this with no API call behind it, so
+                // the client may still not know whether this server wants the
+                // token or the password form. Settle that before signing a URL
+                // the player follows without any fallback of its own.
+                client.ensureAuthNegotiated()
                 client.streamUrl("stream", params + ("id" to trackId))
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -425,6 +431,11 @@ class SubsonicSource(
         owner = owner,
         songCount = songCount,
         thumbnailUrl = client.coverArtUrl(coverArt),
+        // The protocol carries no "may manage" flag. Owner is the closest
+        // thing to one, and an owner the server did not name is treated as
+        // the account itself — servers that omit it list the account's own
+        // playlists, and hiding every write on those would be a regression.
+        canEdit = owner.isBlank() || owner.equals(config.username, ignoreCase = true),
     )
 
     private fun SubsonicSong.toSong(): Song = Song(

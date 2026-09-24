@@ -396,6 +396,7 @@
     <string name="about_album">Về album</string>
     <string name="nothing_matches">Không có nội dung nào khớp với “%1$s”</string>
     <string name="library_loading_all">Đang tải phần còn lại của thư viện…</string>
+    <string name="library_completion_partial">Không tải được toàn bộ danh sách — kết quả có thể chưa đầy đủ</string>
     <string name="close_search">Đóng tìm kiếm</string>
     <string name="less">Thu gọn</string>
     <string name="song_count_with_minutes">%1$s, %2$d phút</string>
@@ -1087,6 +1088,14 @@
     <string name="server_quality_network_detail">Bản gốc trên Wi-Fi và High; 256 kbps trên Medium, 64 kbps trên Low.</string>
 
     <string name="server_quality_original_note">Bản gốc sẽ bỏ qua mức chất lượng dữ liệu di động của bạn cho máy chủ này.</string>
+
+    <string name="server_insecure_http">Cho phép HTTP thường</string>
+
+    <string name="server_insecure_http_allowed">Đã cho phép</string>
+
+    <string name="server_insecure_http_blocked">Bị chặn</string>
+
+    <string name="server_insecure_http_warning">Máy chủ này sẽ gửi tên đăng nhập và mật khẩu của bạn không mã hóa. Bất kỳ ai trên mạng đều có thể đọc và sử dụng lại. Chỉ cho phép điều này trên mạng bạn tin cậy.</string>
 
     <string name="server_browse">Duyệt</string>
 

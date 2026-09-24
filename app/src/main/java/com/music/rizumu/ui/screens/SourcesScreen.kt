@@ -614,9 +614,12 @@ private fun SourceRow(
                     // the line actually says. A server that is merely down
                     // will be up again without anyone doing anything, and
                     // painting that red trains people to ignore the colour by
-                    // the time it means something.
+                    // the time it means something. A policy block is on the
+                    // same footing: it is what the line says until the user
+                    // changes the config.
                     skippedByQuality -> MaterialTheme.colorScheme.onSurfaceVariant
-                    health is SourceHealth.Rejected -> MaterialTheme.colorScheme.error
+                    config.blockedByHttpPolicy || health is SourceHealth.Rejected ->
+                        MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
                 maxLines = 2,
@@ -675,6 +678,10 @@ private fun AudioQuality.localizedLabel(): String = stringResource(
 @Composable
 private fun SourceConfig.statusLine(health: SourceHealth?): String = when {
     !isComplete -> stringResource(R.string.source_setup_required)
+    // Known from the config, so it leads the probe's answer rather than
+    // waiting on it: the row explains the block even if the probe is slow,
+    // skipped, or answers before this composable has a health entry.
+    blockedByHttpPolicy -> SubsonicClient.INSECURE_HTTP_MESSAGE
     health is SourceHealth.Ok -> listOfNotNull(
         health.detail,
         kind.labels.take(3).joinToString(" · "),
@@ -839,6 +846,7 @@ private fun SubsonicSourceEditor(
     var username by remember { mutableStateOf(config.username) }
     var password by remember { mutableStateOf(config.password) }
     var quality by remember { mutableStateOf(config.streamQuality) }
+    var allowInsecureHttp by remember { mutableStateOf(config.allowInsecureHttp) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var statusIsGood by remember { mutableStateOf(false) }
@@ -846,12 +854,19 @@ private fun SubsonicSourceEditor(
     val connected = stringResource(R.string.connected)
     val alreadyAdded = stringResource(R.string.source_already_added)
 
+    // A plain-HTTP address is a decision, not a typo to act on silently: the
+    // request carries the account's credentials, so nothing is tested or
+    // saved against one until the opt-in row is on.
+    val insecure = baseUrl.trim().startsWith("http://", ignoreCase = true)
+    val fieldsComplete = baseUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+
     fun candidate(): SourceConfig = config.copy(
         kind = SourceKind.SUBSONIC,
         baseUrl = SubsonicClient.normalizeBase(baseUrl),
         username = username.trim(),
         password = password,
         streamQuality = quality,
+        allowInsecureHttp = allowInsecureHttp,
     )
 
     fun run(thenSave: Boolean) {
@@ -909,10 +924,12 @@ private fun SubsonicSourceEditor(
         onPasswordChange = { password = it; status = null },
         quality = quality,
         onQualityChange = { quality = it; status = null },
+        allowInsecureHttp = allowInsecureHttp,
+        onAllowInsecureHttpChange = { allowInsecureHttp = it; status = null },
         status = status,
         statusIsGood = statusIsGood,
         testing = busy,
-        canSubmit = baseUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank(),
+        canSubmit = fieldsComplete && (!insecure || allowInsecureHttp),
         onTest = { run(thenSave = false) },
         onSave = { run(thenSave = true) },
         onRemove = if (isNew) null else onDelete,

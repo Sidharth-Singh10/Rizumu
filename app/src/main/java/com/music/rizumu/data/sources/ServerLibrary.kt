@@ -192,6 +192,16 @@ data class ServerPlaylist(
     val owner: String = "",
     val songCount: Int = 0,
     val thumbnailUrl: String? = null,
+    /**
+     * Whether the account this server is configured with may change the
+     * playlist. The protocol has no explicit flag, so this is the server's
+     * `owner` compared with that account, and a server that sends no owner is
+     * taken at its word that the account can manage what it listed. The UI
+     * hides rename and delete until this is known to be true, so a shared or
+     * public playlist never offers a destructive action that would only be
+     * refused.
+     */
+    val canEdit: Boolean = false,
 )
 
 /** One genre on a music server. */

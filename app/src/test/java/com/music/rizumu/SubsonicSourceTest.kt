@@ -15,6 +15,7 @@ import com.music.rizumu.data.sources.ServerBrowseRef
 import com.music.rizumu.data.sources.StreamRequest
 import com.music.rizumu.data.sources.SubsonicSource
 import com.music.rizumu.data.sources.SubsonicStreamQuality
+import com.music.rizumu.data.subsonic.SubsonicClient
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -98,6 +99,9 @@ class SubsonicSourceTest {
         username = username,
         password = password,
         streamQuality = quality,
+        // MockWebServer listens on plain HTTP; production requires this
+        // opt-in before it will send credentials to an http:// address.
+        allowInsecureHttp = true,
     )
 
     private fun source(
@@ -285,6 +289,46 @@ class SubsonicSourceTest {
                 password = "hunter2",
             ).isComplete,
         )
+    }
+
+    @Test
+    fun `a plain-HTTP server is blocked until it is explicitly allowed`() {
+        fun config(allow: Boolean) = SourceConfig(
+            kind = SourceKind.SUBSONIC,
+            baseUrl = "http://music.example.com/rest",
+            username = "levi",
+            password = "hunter2",
+            allowInsecureHttp = allow,
+        )
+
+        assertTrue("http without the opt-in is a policy block", config(allow = false).blockedByHttpPolicy)
+        assertFalse("the opt-in lifts it", config(allow = true).blockedByHttpPolicy)
+        assertFalse("https is never blocked", config(allow = false).copy(baseUrl = "https://music.example.com").blockedByHttpPolicy)
+
+        // The policy is about a server config, not about anything that
+        // happens to hold an http URL.
+        assertFalse(SourceConfig(kind = SourceKind.ADDON, baseUrl = "http://addon.example.com").blockedByHttpPolicy)
+        assertFalse(
+            "only a server config carries the policy",
+            config(allow = false).copy(kind = SourceKind.YOUTUBE).blockedByHttpPolicy,
+        )
+    }
+
+    @Test
+    fun `a blocked server's health names the plain-HTTP refusal`() = runBlocking {
+        val source = SubsonicSource(
+            SourceConfig(
+                kind = SourceKind.SUBSONIC,
+                baseUrl = server.url("/").toString(),
+                username = "levi",
+                password = "hunter2",
+            ),
+        )
+
+        val health = source.health()
+        assertTrue("expected Rejected, got $health", health is SourceHealth.Rejected)
+        assertEquals(SubsonicClient.INSECURE_HTTP_MESSAGE, (health as SourceHealth.Rejected).reason)
+        assertTrue("the gate refuses before anything reaches the wire", seen.isEmpty())
     }
 
     // ── Browse ────────────────────────────────────────────────────────────

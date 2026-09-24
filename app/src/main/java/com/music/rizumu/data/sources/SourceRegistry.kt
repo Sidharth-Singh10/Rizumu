@@ -53,6 +53,15 @@ data class SourceConfig(
     val authMode: SubsonicAuthMode = SubsonicAuthMode.AUTO,
     /** Subsonic only: what this server is asked to serve, standing across connections. */
     val streamQuality: SubsonicStreamQuality = SubsonicStreamQuality.ORIGINAL,
+    /**
+     * Subsonic only: whether this server is allowed to be reached over plain
+     * HTTP. Off by default and deliberately not implied by an `http://`
+     * address: every Subsonic request carries the account name and a reusable
+     * credential in its query string, so an unencrypted one is readable and
+     * replayable by anything on the network. The editor makes the user tick
+     * this and says what it costs.
+     */
+    val allowInsecureHttp: Boolean = false,
 ) {
     /** What the sources screen and the player show. Never blank. */
     val displayName: String
@@ -61,6 +70,31 @@ data class SourceConfig(
                 ?.let { runCatching { Uri.parse(it).host }.getOrNull() }
                 ?: kind.label
         }
+
+    /**
+     * Everything an edit can change, for telling "same server" from "changed"
+     * in memory.
+     *
+     * Used to key the loaded server pages and the artwork cache rather than
+     * [id] and [baseUrl] alone: changing the account, the label, the auth mode
+     * or the quality is just as much a different server to talk to as a new
+     * address, and a page loaded under the old settings must not be treated as
+     * current. The password is folded to a hash so this never holds a readable
+     * copy of it in a string that gets logged or compared by eye.
+     */
+    val fingerprint: String
+        get() = listOf(
+            id,
+            kind.name,
+            label,
+            baseUrl,
+            username,
+            password.hashCode().toString(),
+            enabled.toString(),
+            authMode.name,
+            streamQuality.name,
+            allowInsecureHttp.toString(),
+        ).joinToString("@")
 
     /** Whether this has enough filled in to be worth contacting at all. */
     val isComplete: Boolean
@@ -72,6 +106,21 @@ data class SourceConfig(
             kind == SourceKind.SUBSONIC -> baseUrl.isNotBlank() && username.isNotBlank() && password.isNotBlank()
             else -> baseUrl.isNotBlank()
         }
+
+    /**
+     * Whether the app's own plain-HTTP policy will refuse every request to
+     * this server — see [SubsonicClient.urlFor].
+     *
+     * Kept on the config rather than left to the client so the Sources row can
+     * say why the server is unusable before, and independently of, a probe:
+     * the refusal is a property of what is stored, not of a moment's network
+     * weather. Deliberately not folded into [isComplete]: a blocked server is
+     * still the listener's configured library, and hiding it from the primary
+     * screens would remove the very page that explains the problem.
+     */
+    val blockedByHttpPolicy: Boolean
+        get() = kind == SourceKind.SUBSONIC && !allowInsecureHttp &&
+            SubsonicClient.normalizeBase(baseUrl).toHttpUrlOrNull()?.scheme == "http"
 }
 
 /**
@@ -91,6 +140,13 @@ object SourceRegistry {
 
     private lateinit var prefs: SharedPreferences
 
+    /**
+     * Whether [prefs] is the encrypted store. False after a Keystore failure,
+     * and the one thing that decides whether a password may be written to disk
+     * at all — see [publish].
+     */
+    private var encryptedAtRest = true
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /** Every configured source, enabled or not. */
@@ -106,7 +162,7 @@ object SourceRegistry {
     private var instances: Map<String, MusicSource> = emptyMap()
 
     fun init(context: Context) {
-        prefs = runCatching {
+        val encrypted = runCatching {
             EncryptedSharedPreferences.create(
                 context,
                 "rizumu_sources",
@@ -114,12 +170,31 @@ object SourceRegistry {
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
-        }.getOrElse {
-            // Same degradation as AuthStore: a handful of OEM builds cannot
-            // init the keystore, and refusing to run at all is worse than
-            // storing this the way every other setting in the app is stored.
-            TrackLog.w(TAG, "EncryptedSharedPreferences unavailable for sources: ${it.message}")
-            context.getSharedPreferences("rizumu_sources_plain", Context.MODE_PRIVATE)
+        }.getOrNull()
+
+        val fallback = context.getSharedPreferences(PLAIN_STORE, Context.MODE_PRIVATE)
+        if (encrypted == null) {
+            // A handful of OEM builds cannot init the Keystore, and refusing
+            // to run at all is worse than running degraded — but not so much
+            // worse that a reusable server password gets written where any
+            // backup or file manager can read it. The fallback store is used,
+            // and [publish] strips credentials out of it; see there.
+            TrackLog.w(TAG, "EncryptedSharedPreferences unavailable for sources: running without persistence of credentials")
+            prefs = fallback
+            encryptedAtRest = false
+        } else {
+            // Migration, in both directions: an earlier degraded run may have
+            // left sources — credentials included — in the plain store, and
+            // the encrypted one is where they belong now. With an encrypted
+            // list already present, the plain one is only a stale copy.
+            val plain = fallback.getString(KEY_SOURCES, null)
+            if (plain != null) {
+                if (encrypted.getString(KEY_SOURCES, null) == null) {
+                    encrypted.edit().putString(KEY_SOURCES, plain).apply()
+                }
+                fallback.edit().clear().apply()
+            }
+            prefs = encrypted
         }
 
         val stored = prefs.getString(KEY_SOURCES, null)?.let(::decodeStored) ?: emptyList()
@@ -152,7 +227,13 @@ object SourceRegistry {
             if (it.kind == SourceKind.YOUTUBE && !it.enabled) it.copy(enabled = true) else it
         }
 
-        publish(after, persist = after != stored)
+        // Also rewritten when a degraded run found passwords already sitting
+        // in the plain store — the redaction in [publish] is what gets them
+        // out of it.
+        publish(
+            after,
+            persist = after != stored || (!encryptedAtRest && stored.any { it.password.isNotEmpty() }),
+        )
     }
 
     /**
@@ -318,8 +399,18 @@ object SourceRegistry {
             .filterIsInstance<AddonSource>()
             .forEach { it.release() }
         if (persist && ::prefs.isInitialized) {
+            // The degraded store is plain text: a password written there is a
+            // reusable credential recoverable from any file manager or backup,
+            // so it is stripped rather than persisted. The in-memory list
+            // above still holds it for this run; the next launch asks for it
+            // again, which is the fail-closed behaviour on a device whose
+            // Keystore cannot be trusted.
+            val onDisk = if (encryptedAtRest) next else next.map { it.copy(password = "") }
+            if (!encryptedAtRest && next.any { it.password.isNotEmpty() }) {
+                TrackLog.w(TAG, "not persisting server passwords: encrypted storage unavailable")
+            }
             prefs.edit()
-                .putString(KEY_SOURCES, json.encodeToString(ListSerializer(SourceConfig.serializer()), next))
+                .putString(KEY_SOURCES, json.encodeToString(ListSerializer(SourceConfig.serializer()), onDisk))
                 .apply()
         }
     }
@@ -499,6 +590,10 @@ object SourceRegistry {
     private val BUILT_IN_KINDS = listOf(SourceKind.JIOSAAVN, SourceKind.YOUTUBE)
 
     private const val KEY_SOURCES = "sources"
+
+    /** The degraded, unencrypted store. Never written with a password; see [publish]. */
+    private const val PLAIN_STORE = "rizumu_sources_plain"
+
     private const val PREFIX = "src:"
     private const val BROWSE_PREFIX = "srcb:"
     private const val SEPARATOR = "::"

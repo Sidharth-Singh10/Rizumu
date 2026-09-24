@@ -1005,6 +1005,16 @@
 
     <string name="server_quality_original_note">Original ignores your mobile-data quality setting for this server.</string>
 
+    <string name="library_completion_partial">Couldn’t load the whole list — results may be incomplete</string>
+
+    <string name="server_insecure_http">Allow plain HTTP</string>
+
+    <string name="server_insecure_http_allowed">Allowed</string>
+
+    <string name="server_insecure_http_blocked">Blocked</string>
+
+    <string name="server_insecure_http_warning">This server would send your username and password unencrypted. Anyone on the network can read and reuse them. Only allow this on a network you trust.</string>
+
     <string name="server_browse">Browse</string>
 
     <string name="server_page_failed">Couldn’t load this page</string>

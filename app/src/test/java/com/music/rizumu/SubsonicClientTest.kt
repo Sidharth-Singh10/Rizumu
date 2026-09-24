@@ -13,6 +13,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -57,7 +58,15 @@ class SubsonicClientTest {
     }
 
     private fun client(mode: SubsonicAuthMode = SubsonicAuthMode.AUTO) =
-        SubsonicClient(server.url("/").toString(), "levi", "hunter2", mode)
+        SubsonicClient(
+            rawBaseUrl = server.url("/").toString(),
+            username = "levi",
+            password = "hunter2",
+            authMode = mode,
+            // MockWebServer listens on plain HTTP; production requires this
+            // opt-in before it will send credentials to an http:// address.
+            allowInsecureHttp = true,
+        )
 
     private fun ok(payload: String = "") = MockResponse().setBody(
         """{"subsonic-response":{"status":"ok","version":"1.16.1","type":"navidrome",""" +
@@ -139,6 +148,44 @@ class SubsonicClientTest {
         client(SubsonicAuthMode.LEGACY).ping()
         assertNotNull(query(seen.single(), "p"))
         assertNull(query(seen.single(), "t"))
+    }
+
+    @Test
+    fun `plain HTTP is refused until it is explicitly allowed`() = runBlocking {
+        responder = { ok() }
+        val refused = SubsonicClient(
+            rawBaseUrl = server.url("/").toString(),
+            username = "levi",
+            password = "hunter2",
+        )
+
+        val failure = runCatching { refused.ping() }.exceptionOrNull()
+
+        assertTrue("expected a rejection, got $failure", failure is SubsonicException)
+        assertTrue("no credential may reach the wire", seen.isEmpty())
+    }
+
+    @Test
+    fun `a direct URL is negotiated before it is handed out`() = runBlocking {
+        responder = { request ->
+            if (query(request, "t") != null) {
+                failure(41, "Token authentication not supported")
+            } else {
+                ok()
+            }
+        }
+
+        val client = client()
+        // A cold-start stream URL with no API call behind it: the negotiation
+        // is what makes it carry the form this server accepts.
+        client.ensureAuthNegotiated()
+        val url = client.streamUrl("stream", mapOf("id" to "300"))
+        assertTrue("the URL must use the password form", url.contains("p="))
+        assertFalse("the URL must not also carry a token", url.contains("t="))
+
+        // And only once: every later URL is signed with what was learned.
+        client.ensureAuthNegotiated()
+        assertEquals("one negotiation, one retry", 2, seen.size)
     }
 
     // ── Failures ──────────────────────────────────────────────────────────

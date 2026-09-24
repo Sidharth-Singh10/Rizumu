@@ -444,6 +444,13 @@ fun SubsonicEditorAlert(
     onPasswordChange: (String) -> Unit,
     quality: SubsonicStreamQuality,
     onQualityChange: (SubsonicStreamQuality) -> Unit,
+    /**
+     * Whether a plain-HTTP address is explicitly allowed. The row only shows
+     * for an `http://` URL, and Save/Test stay blocked until it is on — HTTP
+     * puts the account's reusable credentials on the wire in the clear.
+     */
+    allowInsecureHttp: Boolean,
+    onAllowInsecureHttpChange: (Boolean) -> Unit,
     /** What the last test said, or null before one has been run. */
     status: String?,
     statusIsGood: Boolean,
@@ -570,6 +577,54 @@ fun SubsonicEditorAlert(
                     modifier = Modifier.padding(top = 8.dp),
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp, lineHeight = 16.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            // Only for an address that would actually travel in the clear:
+            // an HTTPS server has nothing to opt into, and the warning would
+            // read as noise beside a choice that does not exist.
+            if (urlValue.trim().startsWith("http://", ignoreCase = true)) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(40.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(11.dp))
+                        .clickable(enabled = !testing) { onAllowInsecureHttpChange(!allowInsecureHttp) }
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.server_insecure_http),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = stringResource(
+                            if (allowInsecureHttp) {
+                                R.string.server_insecure_http_allowed
+                            } else {
+                                R.string.server_insecure_http_blocked
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
+                        color = if (allowInsecureHttp) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onBackground
+                        },
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.server_insecure_http_warning),
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                    color = if (allowInsecureHttp) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     textAlign = TextAlign.Center,
                 )
             }

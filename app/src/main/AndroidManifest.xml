@@ -48,14 +48,20 @@
         android:maxSdkVersion="28" />
 
     <!--
-      Cleartext is on, deliberately: a Subsonic server or an addon is
-      something the user hosts themselves, and a home LAN or Tailscale
-      address is routinely plain HTTP. Android blocks cleartext from API 28
-      by default, and without this a self-hosted server is unreachable on
-      every build — release included. The app's own third-party services are
-      all HTTPS, so what this opens is the door the user configured, not a
-      general one. On an untrusted network, put a TLS proxy in front of the
-      server.
+      Cleartext is permitted at the platform level, deliberately: a Subsonic
+      server or an addon is something the user hosts themselves, and a home
+      LAN or Tailscale address is routinely plain HTTP. Android blocks
+      cleartext from API 28 by default, and without this a self-hosted server
+      is unreachable on every build — release included.
+
+      Permission here is not consent: the app itself requires an explicit
+      per-server opt-in before it will send anything to an `http://` address
+      (see SourceConfig.allowInsecureHttp and SubsonicClient.urlFor), because
+      every Subsonic request carries the account name and a reusable
+      credential in its query string. A pasted `http://` URL alone does not
+      enable it, and an HTTPS server that redirects down to HTTP is refused
+      rather than followed. On an untrusted network, put a TLS proxy in front
+      of the server.
     -->
     <application
         android:name=".RizumuApplication"

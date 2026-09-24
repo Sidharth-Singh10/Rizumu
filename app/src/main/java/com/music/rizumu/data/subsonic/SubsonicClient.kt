@@ -51,6 +51,13 @@ class SubsonicClient(
     private val username: String,
     private val password: String,
     private val authMode: SubsonicAuthMode = SubsonicAuthMode.AUTO,
+    /**
+     * Whether the user explicitly accepted a plain-HTTP server. Off by
+     * default: HTTP puts the account name and a reusable credential on the
+     * wire for anyone on the network to read and replay, so it is an opt-in
+     * with a warning rather than something a pasted `http://` silently picks.
+     */
+    private val allowInsecureHttp: Boolean = false,
 ) {
 
     /** Where this server lives, with any trailing `/` or `/rest` off. */
@@ -59,6 +66,32 @@ class SubsonicClient(
     /** Whether the legacy password form has been forced by a server that refused tokens. */
     @Volatile
     private var legacy: Boolean = authMode == SubsonicAuthMode.LEGACY
+
+    /**
+     * Whether an API call has already established which auth form this server
+     * accepts. False only while an [SubsonicAuthMode.AUTO] client has not made
+     * its first call yet — the state a cold-start stream URL is generated in,
+     * which is what [ensureAuthNegotiated] exists for.
+     */
+    @Volatile
+    private var authNegotiated: Boolean = authMode != SubsonicAuthMode.AUTO
+
+    /**
+     * Makes sure [streamUrl] and [coverArtUrl] are signed the way this server
+     * will accept, before either is handed to the player or the image loader.
+     *
+     * Those two cannot fall back the way [call] does: a URL is followed by
+     * ExoPlayer or Coil, not by this class, so a token-signed URL for a
+     * server that only takes the password form fails playback with no retry.
+     * A queue restored after process death goes straight to [streamUrl] with
+     * no API call in between, which is the case this closes.
+     *
+     * One ping on the first direct URL per client, and nothing after it.
+     */
+    suspend fun ensureAuthNegotiated() {
+        if (authNegotiated) return
+        ping()
+    }
 
     /**
      * The salt [streamUrl] uses, stable for the life of this client.
@@ -406,7 +439,7 @@ class SubsonicClient(
         params: List<Pair<String, String>>,
     ): JsonObject {
         val attemptLegacy = legacy
-        return try {
+        val envelope = try {
             fetchEnvelope(endpoint, params, attemptLegacy)
         } catch (refused: TokenAuthUnsupported) {
             if (attemptLegacy || authMode != SubsonicAuthMode.AUTO) {
@@ -415,6 +448,10 @@ class SubsonicClient(
             legacy = true
             fetchEnvelope(endpoint, params, useLegacy = true)
         }
+        // The form that answered is the form this client will sign every URL
+        // with from here on.
+        authNegotiated = true
+        return envelope
     }
 
     /** Fetches, unwraps and validates the envelope: status, errors, JSON-ness. */
@@ -493,6 +530,13 @@ class SubsonicClient(
     ): String {
         val base = baseUrl.toHttpUrlOrNull()
             ?: throw SubsonicException("That is not a usable server address")
+        // Enforced here rather than only in the editor: every credential this
+        // class sends travels in the URL, so a plain-HTTP address that was
+        // never opted into must not reach the network from any path — an API
+        // call, a stream, or a cover fetch.
+        if (base.scheme == "http" && !allowInsecureHttp) {
+            throw SubsonicException(INSECURE_HTTP_MESSAGE)
+        }
         val auth = when {
             useLegacy -> SubsonicAuth.legacyParams(username, password)
             salt != null -> SubsonicAuth.tokenParams(username, password, salt)
@@ -513,6 +557,17 @@ class SubsonicClient(
         const val CLIENT_NAME = SubsonicAuth.CLIENT_NAME
 
         /**
+         * What a plain-HTTP address that was never opted into gets told.
+         *
+         * A constant because two surfaces say it: the gate itself, as a
+         * rejection the probe shows on the Sources row, and the row's status
+         * line when the config already makes the block a fact rather than
+         * something only a network probe can discover.
+         */
+        const val INSECURE_HTTP_MESSAGE =
+            "This server uses plain HTTP; enable insecure HTTP for it to allow that"
+
+        /**
          * The shared client, with a ceiling on the whole call.
          *
          * Derived from [Http.client] rather than built beside it, so the
@@ -523,6 +578,21 @@ class SubsonicClient(
         private val sharedClient: OkHttpClient by lazy {
             Http.client.newBuilder()
                 .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                // OkHttp follows redirects by itself, and a server reached at
+                // an HTTPS address may hand back a Location on plain HTTP.
+                // Following that would put the credentials on the wire in the
+                // clear even though the address the user saved was secure.
+                // The application interceptor sees the final URL after any
+                // redirects, which is what makes the downgrade visible here.
+                .addInterceptor { chain ->
+                    val request = chain.request()
+                    val response = chain.proceed(request)
+                    if (request.url.isHttps && !response.request.url.isHttps) {
+                        response.close()
+                        throw IOException("Refusing a redirect from HTTPS to plain HTTP")
+                    }
+                    response
+                }
                 .build()
         }
 
