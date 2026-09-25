@@ -523,6 +523,43 @@ private const val SHUFFLE_TAP_WINDOW_MS = 400L
 private const val AUTOPLAY_TAP_WINDOW_MS = 700L
 
 /**
+ * The like heart when it is set.
+ *
+ * A warm red-pink rather than the app's red — this button sits on album artwork
+ * of any colour, and a red leaning toward the brand reads as "error" on a cover
+ * that is itself red. #FF4D6D is the shade these players converge on because it
+ * stays legible on light and dark sleeves alike, which the artwork behind it
+ * cannot promise to be.
+ */
+private val LIKED_HEART_COLOR = Color(0xFFFF4D6D)
+
+/**
+ * The like tap's two clocks.
+ *
+ * The heart swells to [LIKE_POP_SCALE] and settles back inside
+ * [LIKE_POP_MS]; the ring around it grows a little further over the same span
+ * and fades as it goes. Both are deliberately short — this is a toggle reached
+ * for in the middle of a song, not a moment to hold the eye, and anything
+ * longer reads as lag rather than delight.
+ */
+private const val LIKE_POP_MS = 260
+private const val LIKE_POP_SCALE = 1.18f
+/** The ring's final radius, as a multiple of the heart's own 19dp. */
+private const val LIKE_RING_SCALE = 2.1f
+
+/**
+ * How long the icon-only controls take to show and hide their press wash.
+ *
+ * In almost immediately — the wash answers "did my finger land", and a fade-in
+ * reads as lag — and out over a beat, so even a quick tap shows something
+ * rather than blinking. The alpha matches [BottomGlyph]'s highlight, which is
+ * the same idea on the bottom row.
+ */
+private const val GLYPH_PRESS_IN_MS = 90
+private const val GLYPH_PRESS_OUT_MS = 200
+private const val GLYPH_PRESS_ALPHA = 0.20f
+
+/**
  * Whether the player is ever narrow enough in this window to run artwork edge to
  * edge — the gate on both the motion-artwork banner and
  * [AppSettings.fullBleedArtwork]. Public so the settings sheet can leave the
@@ -2942,18 +2979,17 @@ fun NowPlayingScreen(
                     // here as canLike = false; see MainActivity.
                     if (canLike) {
                         val liked = likeStatus == LikeStatus.LIKE
-                        CircleGlyph(
-                            icon = if (liked) RizumuIcons.HeartFilled else RizumuIcons.Heart,
+                        LikeGlyph(
+                            liked = liked,
                             contentDescription = stringResource(
                                 if (liked) R.string.remove_from_liked else R.string.like,
                             ),
                             onClick = onToggleLike,
-                            active = liked,
                             haptic = if (liked) Haptic.ToggleOff else Haptic.ToggleOn,
                         )
                         Spacer(Modifier.width(8.dp))
                     }
-                    CircleGlyph(
+                    MenuGlyph(
                         icon = if (showRevertCue) Icons.AutoMirrored.Rounded.Undo else Icons.Rounded.MoreHoriz,
                         contentDescription = stringResource(R.string.more),
                         onClick = onOpenMenu,
@@ -4220,18 +4256,17 @@ private fun WideCredits(
         // has anywhere to record a like — see MainActivity's canLike.
         if (canLike) {
             val liked = likeStatus == LikeStatus.LIKE
-            CircleGlyph(
-                icon = if (liked) RizumuIcons.HeartFilled else RizumuIcons.Heart,
+            LikeGlyph(
+                liked = liked,
                 contentDescription = stringResource(
                     if (liked) R.string.remove_from_liked else R.string.like,
                 ),
                 onClick = onToggleLike,
-                active = liked,
                 haptic = if (liked) Haptic.ToggleOff else Haptic.ToggleOn,
             )
             Spacer(Modifier.width(8.dp))
         }
-        CircleGlyph(
+        MenuGlyph(
             icon = Icons.Rounded.MoreHoriz,
             contentDescription = stringResource(R.string.more),
             onClick = onOpenMenu,
@@ -4805,10 +4840,14 @@ private fun ContentDrawScope.sweepTo(
 
 
 /**
- * The translate control, sized and lit like every other disc in the player —
- * see [CircleGlyph]. Its own composable rather than a [CircleGlyph] call
- * because it has a fourth state the others do not: a request in flight, which
- * takes the icon's place rather than sitting beside it.
+ * The translate control, in the lyrics panel's own disc: the same 34dp circle
+ * and 19dp glyph the player's other small controls use, kept persistent here
+ * because it sits over the lyric sheet rather than on artwork, where the disc
+ * is what separates it from the text behind it.
+ *
+ * Its own composable rather than a [GlyphButton] call for that reason, and
+ * because it has a state the others do not: a request in flight, which takes
+ * the icon's place rather than sitting beside it.
  */
 @Composable
 private fun TranslationToggleButton(
@@ -5996,39 +6035,80 @@ private fun VideoAudioTab(
 }
 
 /**
- * Translucent circular button used for the track menu and the like control.
+ * The circular hit target shared by the credits row's icon-only controls —
+ * the like heart and the track menu.
  *
- * [active] brightens the disc rather than only the glyph: this sits on album
- * artwork of any colour, and a white icon on a white-ish sleeve has no tint
- * change left to make. The filled heart carries the state as a shape too —
- * see [RizumuIcons.HeartFilled].
+ * Neither draws a disc at rest. They used to, and it made the row read as two
+ * kinds of control: a pair of buttons sitting beside the transport's shuffle
+ * and loop, which are the same kind of thing and have no container. What is
+ * left is the glyph alone, with the translucent circle appearing only while a
+ * finger is down — which is the affordance the disc was really for, and the
+ * only moment it has anything to say.
+ *
+ * The target stays 34dp and the glyphs stay 19dp, so nothing about the row's
+ * size, alignment or spacing moved when the disc went: this changes what the
+ * button shows, not where it sits.
  */
 @Composable
-private fun CircleGlyph(
-    icon: ImageVector,
+private fun GlyphButton(
     contentDescription: String,
     onClick: () -> Unit,
-    active: Boolean = false,
+    modifier: Modifier = Modifier,
     haptic: Haptic = Haptic.Tap,
+    content: @Composable () -> Unit,
 ) {
     val haptics = rememberHaptics()
-    val discAlpha by animateFloatAsState(
-        targetValue = if (active) 0.34f else 0.18f,
-        label = "glyphDisc",
+    val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val wash by animateFloatAsState(
+        targetValue = if (pressed) GLYPH_PRESS_ALPHA else 0f,
+        animationSpec = if (reduceAnimation) {
+            snap()
+        } else {
+            tween(durationMillis = if (pressed) GLYPH_PRESS_IN_MS else GLYPH_PRESS_OUT_MS)
+        },
+        label = "glyphPressWash",
     )
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(34.dp)
             .clip(CircleShape)
-            .background(Color.White.copy(alpha = discAlpha))
+            .background(Color.White.copy(alpha = wash))
             .clickable(
-                interactionSource = remember { MutableInteractionSource() },
+                interactionSource = interaction,
                 indication = null,
             ) {
                 haptics.play(haptic)
                 onClick()
-            },
+            }
+            // On the target rather than on the glyph, the way the transport's
+            // mode toggles do it: one node reads as the button, and the icon
+            // inside is decoration.
+            .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+/**
+ * The track menu: [GlyphButton] with the overflow glyph, which swaps to undo
+ * while the revert cue is up.
+ */
+@Composable
+private fun MenuGlyph(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    haptic: Haptic = Haptic.Tap,
+) {
+    GlyphButton(
+        contentDescription = contentDescription,
+        onClick = onClick,
+        modifier = modifier,
+        haptic = haptic,
     ) {
         Crossfade(
             targetState = icon,
@@ -6037,11 +6117,126 @@ private fun CircleGlyph(
         ) { glyph ->
             Icon(
                 imageVector = glyph,
-                contentDescription = contentDescription,
+                contentDescription = null,
                 tint = Color.White,
                 modifier = Modifier.size(19.dp),
             )
         }
+    }
+}
+
+/**
+ * The like control: [GlyphButton] with the heart's own colour and a tap
+ * animation.
+ *
+ * Split from [MenuGlyph] rather than folded into it because this is the one
+ * button in the row that *says something about the song* — the menu beside it
+ * has no on-state, no colour and nothing to celebrate, and threading a
+ * "when liked, tint and pop" branch through the shared component would give
+ * every other caller a parameter it can never mean.
+ *
+ * State is carried three ways at once, deliberately:
+ *
+ *  - **Shape** ([RizumuIcons.Heart] vs [RizumuIcons.HeartFilled]) — the signal
+ *    that survives any backdrop, including a white sleeve that would swallow
+ *    the tint entirely.
+ *  - **Colour** ([LIKED_HEART_COLOR]) — the signal an eye reads first.
+ *  - **Motion** — the signal that confirms the tap landed, which matters most
+ *    when the write is still crossing to the server and the shape has not
+ *    changed yet.
+ *
+ * [liked] arriving back from the host is what drives all three, so the icon
+ * never claims a state the backend has not confirmed.
+ */
+@Composable
+private fun LikeGlyph(
+    liked: Boolean,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    haptic: Haptic = Haptic.Tap,
+) {
+    val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val tint by animateColorAsState(
+        targetValue = if (liked) LIKED_HEART_COLOR else Color.White,
+        animationSpec = if (reduceAnimation) snap() else tween(durationMillis = 200),
+        label = "likeTint",
+    )
+
+    // The pop runs on every toggle, both directions: an unlike that happened in
+    // silence would read as a mis-tap. `progress` goes 0 → 1 once per tap and
+    // carries both the swell and the ring, so the two can never drift apart.
+    //
+    // Seeded with the first `liked` value rather than false, so opening a song
+    // already liked does not pop: the state arrived with the screen, it was not
+    // a tap, and animating it would make the screen look like someone had just
+    // pressed the heart.
+    val progress = remember { Animatable(1f) }
+    var seenLiked by remember { mutableStateOf(liked) }
+    LaunchedEffect(liked, reduceAnimation) {
+        val changed = liked != seenLiked
+        seenLiked = liked
+        if (!changed || reduceAnimation) {
+            progress.snapTo(1f)
+        } else {
+            progress.snapTo(0f)
+            progress.animateTo(1f, tween(durationMillis = LIKE_POP_MS, easing = FastOutSlowInEasing))
+        }
+    }
+
+    GlyphButton(
+        contentDescription = contentDescription,
+        onClick = onClick,
+        modifier = modifier,
+        haptic = haptic,
+    ) {
+        // The ring, behind the heart. Always composed — with alpha 0 at rest it
+        // draws nothing — so the pop never has to recompose to bring it into
+        // being; both its scale and its alpha are read in the draw phase.
+        if (!reduceAnimation) {
+            Box(
+                Modifier
+                    .size(19.dp)
+                    .graphicsLayer {
+                        val p = progress.value
+                        val s = 1f + (LIKE_RING_SCALE - 1f) * p
+                        scaleX = s
+                        scaleY = s
+                        // Out by the time the swell settles, so the tap's energy
+                        // reads as leaving rather than as a second control
+                        // arriving.
+                        alpha = (1f - p) * 0.5f
+                    }
+                    .border(
+                        width = 1.5.dp,
+                        color = tint,
+                        shape = CircleShape,
+                    ),
+            )
+        }
+        Icon(
+            imageVector = if (liked) RizumuIcons.HeartFilled else RizumuIcons.Heart,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier
+                .size(19.dp)
+                // 1x at rest, up to LIKE_POP_SCALE at the peak of the pop. The
+                // curve is read off `progress` so the swell is half the tap and
+                // the settle is the other half — a spring would overshoot past
+                // the peak and read as a bounce, which the brief calls out.
+                .graphicsLayer {
+                    val p = progress.value
+                    // 0 → peak across the first 40%, peak → 1 across the rest.
+                    val swell = if (p < 0.4f) {
+                        p / 0.4f
+                    } else {
+                        1f - (p - 0.4f) / 0.6f
+                    }
+                    val s = 1f + (LIKE_POP_SCALE - 1f) * swell
+                    scaleX = s
+                    scaleY = s
+                },
+        )
     }
 }
 
