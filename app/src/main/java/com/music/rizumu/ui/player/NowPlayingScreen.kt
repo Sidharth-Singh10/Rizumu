@@ -1996,7 +1996,6 @@ fun NowPlayingScreen(
             hasNext = hasNext,
             repeatMode = repeatMode,
             shuffleEnabled = shuffleEnabled,
-            autoplayEnabled = autoplayEnabled,
             canLike = canLike,
             accountName = accountName,
             likeStatus = likeStatus,
@@ -2016,7 +2015,6 @@ fun NowPlayingScreen(
             onSeekFraction = onSeekFraction,
             onToggleShuffle = onToggleShuffle,
             onCycleRepeat = onCycleRepeat,
-            onToggleAutoplay = onToggleAutoplay,
             onOpenMenu = onOpenMenu,
             onOpenAlbum = onOpenAlbum,
             onOpenArtist = onOpenArtist,
@@ -3263,11 +3261,67 @@ fun NowPlayingScreen(
             Spacer(Modifier.height(14.dp + controlSpread / 2))
 
             // ---- Transport ----
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            //
+            // Three regions rather than one evenly-spaced row: the two mode
+            // toggles pinned to the edges, and Previous / Play-Pause / Next
+            // centred in the space between them. A single Row asked to spread
+            // five children — which is what this became once Shuffle landed —
+            // centres the middle of the *row*, not the middle button: with only
+            // four of the five in place, Play sat a slot to the right of the
+            // axis, and the fix people reach for is a margin on one side, which
+            // is a number that quietly goes stale the next time a control is
+            // added.
+            //
+            // A Box centres the transport against the row itself, so it stays
+            // on the axis whatever the mode toggles are drawn at — icon, the
+            // repeat-one "1", or nothing — and at every width, since nothing
+            // here is measured in fixed offsets.
+            Box(Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TransportGlyph(
+                        icon = R.drawable.ic_player_previous,
+                        contentDescription = stringResource(R.string.widget_previous),
+                        size = 48.dp,
+                        onClick = onPrevious,
+                        // Lit whenever back has something to do — either a track to
+                        // step to, or enough elapsed for it to restart this one.
+                        enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
+                        haptic = Haptic.SkipPrevious,
+                    )
+                    // While the stream URL resolves and buffers, the play glyph
+                    // would be a lie — show progress instead.
+                    if (isLoading || audioVersionSwitching) {
+                        // Same footprint as the play/pause target — a smaller box
+                        // here would shunt everything below it on every load.
+                        Box(Modifier.size(100.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                strokeWidth = 3.dp,
+                                modifier = Modifier.size(38.dp),
+                            )
+                        }
+                    } else {
+                        TransportGlyph(
+                            icon = if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
+                            contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
+                            size = 72.dp,
+                            touchSize = 100.dp,
+                            onClick = onPlayPause,
+                            haptic = if (isPlaying) Haptic.Pause else Haptic.Resume,
+                        )
+                    }
+                    TransportGlyph(
+                        icon = R.drawable.ic_player_next,
+                        contentDescription = stringResource(R.string.widget_next),
+                        size = 48.dp,
+                        onClick = onNext,
+                        enabled = hasNext,
+                        haptic = Haptic.SkipNext,
+                    )
+                }
                 // Shuffle leads the transport, where every comparable player
                 // puts it and where it stays visible whether or not the queue
                 // panel is up — see [ShuffleGlyph].
@@ -3280,46 +3334,26 @@ fun NowPlayingScreen(
                     onClick = onToggleShuffle,
                     haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
                     tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
+                    modifier = Modifier.align(Alignment.CenterStart),
                 )
-                TransportGlyph(
-                    icon = R.drawable.ic_player_previous,
-                    contentDescription = stringResource(R.string.widget_previous),
-                    size = 48.dp,
-                    onClick = onPrevious,
-                    // Lit whenever back has something to do — either a track to
-                    // step to, or enough elapsed for it to restart this one.
-                    enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
-                    haptic = Haptic.SkipPrevious,
-                )
-                // While the stream URL resolves and buffers, the play glyph
-                // would be a lie — show progress instead.
-                if (isLoading || audioVersionSwitching) {
-                    // Same footprint as the play/pause target — a smaller box
-                    // here would shunt everything below it on every load.
-                    Box(Modifier.size(100.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(38.dp),
-                        )
-                    }
-                } else {
-                    TransportGlyph(
-                        icon = if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
-                        contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
-                        size = 72.dp,
-                        touchSize = 100.dp,
-                        onClick = onPlayPause,
-                        haptic = if (isPlaying) Haptic.Pause else Haptic.Resume,
-                    )
-                }
-                TransportGlyph(
-                    icon = R.drawable.ic_player_next,
-                    contentDescription = stringResource(R.string.widget_next),
-                    size = 48.dp,
-                    onClick = onNext,
-                    enabled = hasNext,
-                    haptic = Haptic.SkipNext,
+                // Loop closes it, the mirror of Shuffle — see [RepeatGlyph].
+                RepeatGlyph(
+                    repeatMode = repeatMode,
+                    accent = artworkAccent,
+                    contentDescription = stringResource(
+                        when (repeatMode) {
+                            Player.REPEAT_MODE_ONE -> R.string.repeat_one
+                            Player.REPEAT_MODE_ALL -> R.string.repeat_all
+                            else -> R.string.repeat_off
+                        },
+                    ),
+                    onClick = onCycleRepeat,
+                    haptic = when (repeatMode) {
+                        Player.REPEAT_MODE_OFF -> Haptic.ToggleOn
+                        Player.REPEAT_MODE_ONE -> Haptic.ToggleOff
+                        else -> Haptic.Select
+                    },
+                    modifier = Modifier.align(Alignment.CenterEnd),
                 )
             }
 
@@ -3377,14 +3411,18 @@ fun NowPlayingScreen(
             Spacer(Modifier.height(6.dp))
 
             // Lyrics and queue are the two things that are true of the player in
-            // both states, so they are simply always here. Only the capsule
-            // between them swaps: output and party while the artwork is showing,
-            // the three playback modes once the queue is.
+            // both states, so they are simply always here. The capsule between
+            // them swaps too, but only between the two-up output pair and
+            // AutoPlay's own single segment — the playback modes Shuffle and
+            // Loop that used to ride this capsule while the queue was up now
+            // live in the transport above, where they are reachable whatever
+            // panel is showing rather than only behind the queue.
             BoxWithConstraints(Modifier.fillMaxWidth()) {
-            // Sized for the wider of the two capsules — the three-up one — in
-            // both states. Computed for whichever was on screen it would change
-            // as they swap, and the lyrics and queue glyphs would slide with it.
-            val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(3)
+            // Sized for the wider of the two capsules — the two-up output pair —
+            // in both states. Computed for whichever was on screen it would
+            // change as they swap, and the lyrics and queue glyphs would slide
+            // with it.
+            val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(2)
             val edgeInset = ((maxWidth - widestRow) / 4).coerceAtLeast(0.dp)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = edgeInset),
@@ -3414,54 +3452,28 @@ fun NowPlayingScreen(
                     label = "playerBottomPill",
                 ) { showQueueModes ->
                     if (showQueueModes) {
-                        Pill {
-                            PillSegment(
-                                icon = RizumuIcons.Shuffle,
-                                contentDescription = stringResource(
-                                    if (shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off,
-                                ),
-                                onClick = onToggleShuffle,
-                                highlighted = shuffleEnabled,
-                                // The one segment whose glyph carries the
-                                // artwork's colour: the accent says the mode is
-                                // on, on the icon rather than as a filled button.
-                                activeTint = artworkAccent,
-                                haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
-                                tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
-                            )
-                            PillDivider()
-                            PillSegment(
-                                icon = if (repeatMode == Player.REPEAT_MODE_ONE) null else RizumuIcons.Repeat,
-                                label = if (repeatMode == Player.REPEAT_MODE_ONE) "1" else null,
-                                contentDescription = when (repeatMode) {
-                                    Player.REPEAT_MODE_ONE -> stringResource(R.string.repeat_one)
-                                    Player.REPEAT_MODE_ALL -> stringResource(R.string.repeat_all)
-                                    else -> stringResource(R.string.repeat_off)
-                                },
-                                onClick = onCycleRepeat,
-                                highlighted = repeatMode != Player.REPEAT_MODE_OFF,
-                                // Three states, so the buzz tracks the edges of
-                                // the cycle: leaving off rises, returning to off
-                                // falls, and the step between the two repeat
-                                // modes is just a selection.
-                                haptic = when (repeatMode) {
-                                    Player.REPEAT_MODE_OFF -> Haptic.ToggleOn
-                                    Player.REPEAT_MODE_ONE -> Haptic.ToggleOff
-                                    else -> Haptic.Select
-                                },
-                            )
-                            PillDivider()
-                            PillSegment(
-                                icon = RizumuIcons.Infinity,
-                                contentDescription = stringResource(
-                                    if (autoplayEnabled) R.string.autoplay_on else R.string.autoplay_off,
-                                ),
-                                onClick = onToggleAutoplay,
-                                highlighted = autoplayEnabled,
-                                haptic = if (autoplayEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
-                                tapWindowMs = AUTOPLAY_TAP_WINDOW_MS,
-                            )
-                        }
+                        // AutoPlay's own glyph. It stays here rather than
+                        // moving up with the other two modes: it answers "what
+                        // is in the queue", which is the queue's own question,
+                        // and this is the only place on screen it can be
+                        // reached from — the notification action aside.
+                        //
+                        // A plain [BottomGlyph] rather than a one-segment Pill,
+                        // which is what this became once Shuffle and Loop left:
+                        // a lone 54dp-wide segment clips to a 54×44 oval, and an
+                        // oval here reads as a capsule that lost its other
+                        // halves. This is a circle of the same 44dp as the two
+                        // glyphs beside it, so the three read as one row again.
+                        BottomGlyph(
+                            icon = RizumuIcons.Infinity,
+                            contentDescription = stringResource(
+                                if (autoplayEnabled) R.string.autoplay_on else R.string.autoplay_off,
+                            ),
+                            onClick = onToggleAutoplay,
+                            highlighted = autoplayEnabled,
+                            haptic = if (autoplayEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+                            tapWindowMs = AUTOPLAY_TAP_WINDOW_MS,
+                        )
                     } else {
                         OutputPartyPill(
                             onOutput = openAudioOutput,
@@ -3633,7 +3645,6 @@ private fun WidePlayerControls(
     hasNext: Boolean,
     repeatMode: Int,
     shuffleEnabled: Boolean,
-    autoplayEnabled: Boolean,
     canLike: Boolean,
     /** For the output caption's "<name>'s Phone" — see [OutputCaption]. */
     accountName: String?,
@@ -3654,7 +3665,6 @@ private fun WidePlayerControls(
     onSeekFraction: (Float) -> Unit,
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
-    onToggleAutoplay: () -> Unit,
     onOpenMenu: () -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
@@ -3787,11 +3797,52 @@ private fun WidePlayerControls(
 
             Spacer(Modifier.height(14.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            // Exactly the phone's transport, restructured the same way and for
+            // the same reason: the two mode toggles at the edges, Previous /
+            // Play-Pause / Next centred against the row — see the phone's own
+            // note on why this is a Box and not one evenly-spaced Row.
+            Box(Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.align(Alignment.Center),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TransportGlyph(
+                        icon = R.drawable.ic_player_previous,
+                        contentDescription = stringResource(R.string.widget_previous),
+                        size = 48.dp,
+                        onClick = onPrevious,
+                        enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
+                        haptic = Haptic.SkipPrevious,
+                    )
+                    if (isLoading) {
+                        Box(Modifier.size(100.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                strokeWidth = 3.dp,
+                                modifier = Modifier.size(30.dp),
+                            )
+                        }
+                    } else {
+                        TransportGlyph(
+                            icon = if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
+                            contentDescription = stringResource(
+                                if (isPlaying) R.string.pause else R.string.play,
+                            ),
+                            size = 72.dp,
+                            touchSize = 100.dp,
+                            onClick = onPlayPause,
+                            haptic = if (isPlaying) Haptic.Pause else Haptic.Resume,
+                        )
+                    }
+                    TransportGlyph(
+                        icon = R.drawable.ic_player_next,
+                        contentDescription = stringResource(R.string.widget_next),
+                        size = 48.dp,
+                        onClick = onNext,
+                        enabled = hasNext,
+                        haptic = Haptic.SkipNext,
+                    )
+                }
                 // As on the phone: a persistent shuffle toggle at the head of
                 // the transport, not only the queue panel's capsule.
                 ShuffleGlyph(
@@ -3803,42 +3854,26 @@ private fun WidePlayerControls(
                     onClick = onToggleShuffle,
                     haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
                     tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
+                    modifier = Modifier.align(Alignment.CenterStart),
                 )
-                TransportGlyph(
-                    icon = R.drawable.ic_player_previous,
-                    contentDescription = stringResource(R.string.widget_previous),
-                    size = 48.dp,
-                    onClick = onPrevious,
-                    enabled = hasPrevious || positionMs > BACK_RESTARTS_AFTER_MS,
-                    haptic = Haptic.SkipPrevious,
-                )
-                if (isLoading) {
-                    Box(Modifier.size(100.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(30.dp),
-                        )
-                    }
-                } else {
-                    TransportGlyph(
-                        icon = if (isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play,
-                        contentDescription = stringResource(
-                            if (isPlaying) R.string.pause else R.string.play,
-                        ),
-                        size = 72.dp,
-                        touchSize = 100.dp,
-                        onClick = onPlayPause,
-                        haptic = if (isPlaying) Haptic.Pause else Haptic.Resume,
-                    )
-                }
-                TransportGlyph(
-                    icon = R.drawable.ic_player_next,
-                    contentDescription = stringResource(R.string.widget_next),
-                    size = 48.dp,
-                    onClick = onNext,
-                    enabled = hasNext,
-                    haptic = Haptic.SkipNext,
+                // Loop closes it, as on the phone — see [RepeatGlyph].
+                RepeatGlyph(
+                    repeatMode = repeatMode,
+                    accent = artworkAccent,
+                    contentDescription = stringResource(
+                        when (repeatMode) {
+                            Player.REPEAT_MODE_ONE -> R.string.repeat_one
+                            Player.REPEAT_MODE_ALL -> R.string.repeat_all
+                            else -> R.string.repeat_off
+                        },
+                    ),
+                    onClick = onCycleRepeat,
+                    haptic = when (repeatMode) {
+                        Player.REPEAT_MODE_OFF -> Haptic.ToggleOn
+                        Player.REPEAT_MODE_ONE -> Haptic.ToggleOff
+                        else -> Haptic.Select
+                    },
+                    modifier = Modifier.align(Alignment.CenterEnd),
                 )
             }
 
@@ -3892,19 +3927,16 @@ private fun WidePlayerControls(
             // lyrics glyph lit to say which panel you are in, the two-up
             // output capsule, and the way through to the queue.
             //
-            // The three playback modes that used to sit here are gone, because
-            // on the phone they are not part of this row at all — they are the
-            // *queue's* capsule, which the row swaps in only while the queue is
-            // up. A layout that shows lyrics can't be showing the queue, so
-            // they never belonged here; what belongs is the two-segment output
-            // capsule, which is exactly what the phone shows in this state.
+            // The playback modes that used to swap in here while the queue was
+            // up are gone from this row entirely. On the phone they now live in
+            // the transport beside Shuffle and Loop, reachable whatever panel is
+            // showing, so there is nothing left for this row to swap between:
+            // the output capsule stands alone on both layouts.
             //
-            // Sized off the wider, three-up capsule the queue would use, the
-            // same way the phone does, so the glyphs either side sit at the
-            // same inset on both and don't shift if this layout ever grows a
-            // queue state of its own.
+            // Sized off the two-up output capsule, the same way the phone now
+            // is, so the glyphs either side sit at the same inset on both.
             BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(3)
+                val widestRow = BOTTOM_ACTION_SIZE * 2 + pillWidth(2)
                 val edgeInset = ((maxWidth - widestRow) / 4).coerceAtLeast(0.dp)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = edgeInset),
@@ -3922,68 +3954,7 @@ private fun WidePlayerControls(
                         onClick = onToggleLyrics,
                         highlighted = lyricsOpen,
                     )
-                    // The capsule the phone swaps in on exactly this condition:
-                    // the output pair normally, the three playback modes while
-                    // the queue is up, since that is when they are what you are
-                    // about to reach for.
-                    AnimatedContent(
-                        targetState = queueOpen,
-                        transitionSpec = {
-                            (fadeIn(tween(180, delayMillis = 140)) togetherWith fadeOut(tween(140)))
-                                // Unclipped: the capsule's own rounded ends are
-                                // what the eye follows through the width change.
-                                .using(SizeTransform(clip = false) { _, _ -> tween(220) })
-                        },
-                        label = "widePlayerBottomPill",
-                    ) { showQueueModes ->
-                        if (showQueueModes) {
-                            Pill {
-                                PillSegment(
-                                    icon = RizumuIcons.Shuffle,
-                                    contentDescription = stringResource(
-                                        if (shuffleEnabled) R.string.shuffle_on else R.string.shuffle_off,
-                                    ),
-                                    onClick = onToggleShuffle,
-                                    highlighted = shuffleEnabled,
-                                    // As on the phone: the artwork's colour on
-                                    // the glyph, not a filled segment.
-                                    activeTint = artworkAccent,
-                                    haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
-                                    tapWindowMs = SHUFFLE_TAP_WINDOW_MS,
-                                )
-                                PillDivider()
-                                PillSegment(
-                                    icon = if (repeatMode == Player.REPEAT_MODE_ONE) null else RizumuIcons.Repeat,
-                                    label = if (repeatMode == Player.REPEAT_MODE_ONE) "1" else null,
-                                    contentDescription = when (repeatMode) {
-                                        Player.REPEAT_MODE_ONE -> stringResource(R.string.repeat_one)
-                                        Player.REPEAT_MODE_ALL -> stringResource(R.string.repeat_all)
-                                        else -> stringResource(R.string.repeat_off)
-                                    },
-                                    onClick = onCycleRepeat,
-                                    haptic = when (repeatMode) {
-                                        Player.REPEAT_MODE_OFF -> Haptic.ToggleOn
-                                        Player.REPEAT_MODE_ONE -> Haptic.ToggleOff
-                                        else -> Haptic.Select
-                                    },
-                                    highlighted = repeatMode != Player.REPEAT_MODE_OFF,
-                                )
-                                PillDivider()
-                                PillSegment(
-                                    icon = RizumuIcons.Infinity,
-                                    contentDescription = stringResource(
-                                        if (autoplayEnabled) R.string.autoplay_on else R.string.autoplay_off,
-                                    ),
-                                    onClick = onToggleAutoplay,
-                                    highlighted = autoplayEnabled,
-                                    haptic = if (autoplayEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
-                                    tapWindowMs = AUTOPLAY_TAP_WINDOW_MS,
-                                )
-                            }
-                        } else {
-                            OutputPartyPill(onOutput = onOpenOutput, onParty = onListenTogether)
-                        }
-                    }
+                    OutputPartyPill(onOutput = onOpenOutput, onParty = onListenTogether)
                     BottomGlyph(
                         icon = RizumuIcons.Queue,
                         contentDescription = stringResource(R.string.up_next),
@@ -6137,9 +6108,86 @@ private fun ShuffleGlyph(
     accent: Color,
     contentDescription: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     haptic: Haptic = Haptic.Tap,
     /** See [BottomGlyph], where the same window means the same thing. */
     tapWindowMs: Long = 0L,
+) {
+    TransportModeGlyph(
+        active = active,
+        accent = accent,
+        contentDescription = contentDescription,
+        onClick = onClick,
+        haptic = haptic,
+        tapWindowMs = tapWindowMs,
+        modifier = modifier,
+        icon = { RizumuIcons.Shuffle },
+    )
+}
+
+/**
+ * Loop (repeat) as a transport control, the mirror of [ShuffleGlyph] at the
+ * other end of the row.
+ *
+ * The three states are the ones the queue capsule used to carry, and the
+ * wording is the project's own: off, repeat the queue, repeat the track. The
+ * loop arrow is the control in every state; track-repeat sets a "1" inside it,
+ * the Spotify treatment, rather than replacing the arrow outright — the arrow
+ * is what makes the control legible as "repeat" at a glance, and the numeral
+ * only has to say which of the two repeat modes is on.
+ *
+ * Placed beside Shuffle rather than in the queue because the two answer the
+ * same kind of question ("how does the queue play?") and belong where both are
+ * reachable whatever panel is up — see the transport row's own note.
+ */
+@Composable
+private fun RepeatGlyph(
+    repeatMode: Int,
+    accent: Color,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    haptic: Haptic = Haptic.Tap,
+    tapWindowMs: Long = 0L,
+) {
+    val one = repeatMode == Player.REPEAT_MODE_ONE
+    TransportModeGlyph(
+        active = repeatMode != Player.REPEAT_MODE_OFF,
+        accent = accent,
+        contentDescription = contentDescription,
+        onClick = onClick,
+        haptic = haptic,
+        tapWindowMs = tapWindowMs,
+        modifier = modifier,
+        // Track-repeat is the loop arrow with a "1" built into it, the way
+        // Spotify and YouTube Music draw it — the loop keeps the control
+        // recognisable and the numeral says which of the two repeat modes is
+        // on. Queue-repeat is the plain arrow.
+        icon = { if (one) RizumuIcons.RepeatOne else RizumuIcons.Repeat },
+    )
+}
+
+/**
+ * The shared body of the two playback-mode toggles that flank the transport —
+ * Shuffle on the left, Loop on the right.
+ *
+ * Both are the same control under the surface, so they are the same composable
+ * with a different glyph: the same 56dp touch target, the same 26dp optical
+ * size, the same accent-when-on tint, the same state dot hanging below the axis
+ * rather than pushing it up, and the same tap window. A second implementation
+ * would be where the pair quietly drifts apart, which is exactly the asymmetry
+ * this row was restructured to fix.
+ */
+@Composable
+private fun TransportModeGlyph(
+    active: Boolean,
+    accent: Color,
+    contentDescription: String,
+    onClick: () -> Unit,
+    haptic: Haptic,
+    tapWindowMs: Long,
+    icon: () -> ImageVector,
+    modifier: Modifier = Modifier,
 ) {
     val haptics = rememberHaptics()
     val lastTap = remember { mutableLongStateOf(-tapWindowMs) }
@@ -6147,15 +6195,15 @@ private fun ShuffleGlyph(
     val tint by animateColorAsState(
         targetValue = if (active) accent else Color.White.copy(alpha = 0.62f),
         animationSpec = if (reduceAnimation) snap() else tween(durationMillis = 200),
-        label = "shuffleGlyphTint",
+        label = "modeGlyphTint",
     )
     val dotAlpha by animateFloatAsState(
         targetValue = if (active) 1f else 0f,
         animationSpec = if (reduceAnimation) snap() else tween(durationMillis = 200),
-        label = "shuffleGlyphDot",
+        label = "modeGlyphDot",
     )
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(56.dp)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -6173,9 +6221,10 @@ private fun ShuffleGlyph(
     ) {
         // The glyph stays optically centred on the row's axis, like the
         // transport drawables beside it; the dot hangs below rather than
-        // pushing the icon up.
+        // pushing the icon up. Repeat-one's numeral is part of its own vector
+        // path, so nothing is layered here.
         Icon(
-            imageVector = RizumuIcons.Shuffle,
+            imageVector = icon(),
             contentDescription = null,
             tint = tint,
             modifier = Modifier.size(26.dp),
