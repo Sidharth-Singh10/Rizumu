@@ -174,6 +174,58 @@ object RizumuIcons {
     val Repeat: ImageVector by lazy { repeatLoop("bc_repeat") }
 
     /**
+     * Repeat-one: the same loop with a "1" set inside it.
+     *
+     * Drawn rather than composited from [Repeat] plus a text glyph, because
+     * the numeral has to fit the loop's opening and a bitmap "1" big enough to
+     * read would sit on the stroke. This loop is stretched taller — straights
+     * 10.8 apart instead of [Repeat]'s 8.8 — so the interior has room for the
+     * numeral, the stroke drops to 2.0 to widen the gap further, and the
+     * arrowheads are tucked in toward the ends of the straights rather than
+     * reaching toward the centre, where the "1" lives. The clearance was
+     * measured offline rather than eyeballed: the numeral keeps ~0.9 units of
+     * air from the loop all the way round.
+     */
+    val RepeatOne: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_repeat_one",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // The loop, taller than [Repeat]'s so the numeral has a home.
+                moveTo(8.6f, 6.8f)
+                lineTo(15.4f, 6.8f)
+                arcToRelative(5.4f, 5.4f, 0f, isMoreThanHalf = false, isPositiveArc = true, 0f, 10.8f)
+                lineTo(8.6f, 17.6f)
+                arcToRelative(5.4f, 5.4f, 0f, isMoreThanHalf = false, isPositiveArc = true, 0f, -10.8f)
+                close()
+                // Direction of travel: right along the top, left along the
+                // bottom. Held near the ends, clear of the numeral's column.
+                moveTo(13.9f, 5.2f); lineTo(15.4f, 6.8f); lineTo(13.9f, 8.4f)
+                moveTo(10.1f, 15.6f); lineTo(8.6f, 17.6f); lineTo(10.1f, 19.2f)
+            }
+            path(
+                stroke = stroke,
+                strokeLineWidth = 1.7f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // The numeral: a flag dropping into the stem, on the loop's
+                // centre line and short enough to clear both straights.
+                moveTo(11.2f, 12f)
+                lineTo(12.6f, 10.8f)
+                lineTo(12.6f, 14.2f)
+            }
+        }.build()
+    }
+
+    /**
      * Two straight runs joined by semicircles, with the arrow heads lying flat
      * at the ends of the straights. Putting them on the curves instead — as a
      * first pass did — makes the glyph read as a refresh/sync symbol.
