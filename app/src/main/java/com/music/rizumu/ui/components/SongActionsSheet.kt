@@ -235,8 +235,14 @@ fun SongActionsSheet(
         // and, being a stream rather than a file, the network. A server track
         // stars on its own server, so it needs no Google account at all; only
         // a file on disk can record neither, and it is excluded for both.
-        val youtubeRated = signedIn && !isOffline && SourceRegistry.parseTrackKey(song.videoId) == null
+        //
+        // Exclusive rather than additive: a track a server is serving is
+        // starred there and not also rated on YouTube, even for a signed-in
+        // listener — see [serverBacked]. Offering both would put two hearts on
+        // one song that disagree about what they are changing.
         val serverRated = serverBacked && !isOffline
+        val youtubeRated = !serverBacked && signedIn && !isOffline &&
+            SourceRegistry.parseTrackKey(song.videoId) == null
         if (youtubeRated || serverRated) {
             ActionRow(
                 icon = if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,

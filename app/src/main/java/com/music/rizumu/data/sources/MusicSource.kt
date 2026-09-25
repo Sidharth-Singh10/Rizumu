@@ -101,6 +101,22 @@ data class SourceStream(
      * reproduces the stream already playing.
      */
     val sourceConfigId: String? = null,
+    /**
+     * The server row this stream was matched to, when a server answered for a
+     * track that was queued from somewhere else.
+     *
+     * Set only by [SourceResolver]'s cross-source matching, and only when the
+     * source that answered is a [ServerLibrary]. A track queued from YouTube
+     * keeps its bare video id everywhere else in the app — the queue, the
+     * history, the "playing from" label — because that is the identity the
+     * listener picked. This is the *other* identity the same recording has on
+     * a server, carried alongside so a like can be written against it: see
+     * [com.music.rizumu.data.ServerCopy].
+     *
+     * Null for a source's own track (its id already is the server key) and
+     * for every stream no server was involved in.
+     */
+    val matchedServerSong: Song? = null,
 )
 
 /**

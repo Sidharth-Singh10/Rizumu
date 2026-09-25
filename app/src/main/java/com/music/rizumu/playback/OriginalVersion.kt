@@ -2,6 +2,7 @@ package com.music.rizumu.playback
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.music.rizumu.data.ServerCopy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +58,10 @@ object OriginalVersion {
     /** Keeps [videoId] on YouTube's own upload for every play from here on. */
     fun pin(videoId: String) {
         if (videoId.isBlank() || isPinned(videoId)) return
+        // Sent back to YouTube's own upload by hand, so the server row behind
+        // it stops being what a heart would write to — see [ServerCopy]. The
+        // listener has just said that match is wrong for this song.
+        ServerCopy.forget(videoId)
         var next = _pinned.value + videoId
         // Oldest first, because the newest entry is the one the listener just
         // made. A cap at all is only about not carrying a list that grows for

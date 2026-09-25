@@ -77,6 +77,7 @@ import java.util.concurrent.ConcurrentHashMap
 import com.music.rizumu.data.Http
 import com.music.rizumu.data.LikeState
 import com.music.rizumu.data.NerdStats
+import com.music.rizumu.data.ServerCopy
 import com.music.rizumu.data.ServerLikeState
 import com.music.rizumu.data.ServerStarQueue
 import com.music.rizumu.data.TrackLog
@@ -1177,6 +1178,9 @@ class PlaybackService : MediaLibraryService() {
             if (dataSpec.uri.getQueryParameter(DIRECT_YOUTUBE_PARAMETER) == "1") {
                 QualityUpgrade.forget(videoId)
                 StreamChoice.forget(videoId)
+                // The catalogue match the listener just rejected is no longer
+                // what a heart should write to either — see [ServerCopy].
+                ServerCopy.forget(videoId)
                 NerdStats.clearDeclared(videoId)
                 NerdStats.recordSource(videoId, "YouTube")
                 val streamUrl = try {

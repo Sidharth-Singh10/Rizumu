@@ -1,6 +1,7 @@
 package com.music.rizumu.playback
 
 import android.os.SystemClock
+import com.music.rizumu.data.ServerCopy
 import com.music.rizumu.data.sources.SourceStream
 import java.util.concurrent.ConcurrentHashMap
 
@@ -77,6 +78,11 @@ object StreamChoice {
      *   that fails has not.
      */
     fun remember(videoId: String, stream: SourceStream, substituted: Boolean) {
+        // The other half of what this class remembers: which server row is
+        // serving the track, for the like that can be written against it. Both
+        // directions ride this call because it is the one place that knows a
+        // resolve has happened and what it came back with — see [ServerCopy].
+        ServerCopy.record(videoId, stream.matchedServerSong)
         if (chosen.size >= MAX_REMEMBERED) {
             // Drop what can no longer be honoured, and only then the oldest of
             // what can. This used to `clear()`, which is the one eviction

@@ -120,6 +120,7 @@ import com.music.rizumu.data.LocalMediaRepository
 import com.music.rizumu.data.listentogether.JamInviteLink
 import com.music.rizumu.data.listentogether.ListenTogether
 import com.music.rizumu.data.NerdStats
+import com.music.rizumu.data.ServerCopy
 import com.music.rizumu.data.TrackLog
 import com.music.rizumu.data.innertube.InnertubeParser
 import com.music.rizumu.data.model.BrowseType
@@ -689,6 +690,9 @@ private fun RizumuApp(
     val songSort = detail?.browseId?.let { detailSongSorts[it] } ?: SongSort.DEFAULT
     var songSortMenuOpen by remember { mutableStateOf(false) }
     val likeStatuses by viewModel.likeStatuses.collectAsStateWithLifecycle()
+    // Which playing tracks a server is serving rather than YouTube, so the
+    // heart beside one can be that server's star — see [ServerCopy].
+    val serverCopies by ServerCopy.songs.collectAsStateWithLifecycle()
     // Which tracks are being held on YouTube's own upload, so the player's menu
     // offers the way back out of a revert rather than the revert again.
     val pinnedToOriginal by OriginalVersion.pinned.collectAsStateWithLifecycle()
@@ -1889,6 +1893,17 @@ private fun RizumuApp(
                 )
             }
             ?: song
+        // What a heart beside this track would write to. A song queued from
+        // YouTube is normally rated on YouTube, but when a server ranked above
+        // it is serving that same recording, the server's own row is what can
+        // be starred — see [ServerCopy]. The server copy wins when both are
+        // possible: it is the copy coming out of the speaker, and a star on it
+        // is what "like this" means for a track the listener's own server holds.
+        //
+        // Only the like follows this identity. The queue entry, the scrobbles,
+        // the lyrics and the revert path all keep working off the YouTube id.
+        val serverCopy = serverCopies[displayedSong.videoId]
+        val likeTarget = serverCopy ?: displayedSong
         val playedBy = partyState
             .takeIf {
                 it.inParty && it.playback.track?.videoId == displayedSong.videoId
@@ -1990,13 +2005,13 @@ private fun RizumuApp(
             // The heart appears where a like can actually be written: a
             // signed-in YouTube track, or a track from a server that can star
             // it. A file on disk has no identity to write against either way.
-            canLike = displayedSong.localUri == null &&
+            canLike = likeTarget.localUri == null &&
                 (
-                    viewModel.canLikeServerTrack(displayedSong.videoId) ||
-                        (signedIn && SourceRegistry.parseTrackKey(displayedSong.videoId) == null)
+                    viewModel.canLikeServerTrack(likeTarget.videoId) ||
+                        (signedIn && SourceRegistry.parseTrackKey(likeTarget.videoId) == null)
                 ),
-            likeStatus = likeStatuses[song.videoId] ?: LikeStatus.INDIFFERENT,
-            onToggleLike = { viewModel.toggleLike(song) },
+            likeStatus = likeStatuses[likeTarget.videoId] ?: LikeStatus.INDIFFERENT,
+            onToggleLike = { viewModel.toggleLike(likeTarget) },
             // The service owns both the queue and the Shuffle state. Keeping
             // the toggle on that side prevents the UI from changing the icon
             // before its asynchronous reorder command has actually landed.
@@ -3337,6 +3352,10 @@ private fun RizumuApp(
             // read off the player's own visibility any more, because on a
             // tablet the player is visible whatever the menu was opened from.
             val fromPlayer = menuFromPlayer
+            // The same server row the player's heart would write to, so the
+            // menu's Like row and the heart cannot disagree about which copy of
+            // the track is being liked — see [ServerCopy].
+            val likeTarget = serverCopies[song.videoId] ?: song
             val share: () -> Unit = {
                 val sendIntent = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
@@ -3395,8 +3414,8 @@ private fun RizumuApp(
                     // is no Google account surface there to write to. A server
                     // track still gets its own rows — see serverBacked.
                     signedIn = signedIn && !serverMode,
-                    serverBacked = viewModel.canLikeServerTrack(song.videoId),
-                    likeStatus = likeStatuses[song.videoId] ?: LikeStatus.INDIFFERENT,
+                    serverBacked = viewModel.canLikeServerTrack(likeTarget.videoId),
+                    likeStatus = likeStatuses[likeTarget.videoId] ?: LikeStatus.INDIFFERENT,
                     onPlayNext = { playNext(song); songActions = null },
                     onAddToQueue = { addToQueue(song); songActions = null },
                     onStartRadio = { startRadio(song); songActions = null },
@@ -3406,7 +3425,7 @@ private fun RizumuApp(
                     onDownload = { downloadSong(song) },
                     // The sheet stays up for a rating: it shows the new state
                     // in place, and people often thumb a song and then queue it.
-                    onToggleLike = { viewModel.toggleLike(song) },
+                    onToggleLike = { viewModel.toggleLike(likeTarget) },
                     onToggleDislike = { viewModel.toggleDislike(song.videoId) },
                     onAddToPlaylist = if (serverMode && SourceRegistry.parseTrackKey(song.videoId) == null) {
                         // Server mode has no YouTube account, so a YouTube

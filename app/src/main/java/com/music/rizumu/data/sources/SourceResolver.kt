@@ -930,6 +930,11 @@ object SourceResolver {
             val stream = opened.copy(
                 durationSec = TrackMatcher.secondsOf(match.durationText),
                 sourceConfigId = source.configId,
+                // Only a server hands back a row a like can be written
+                // against. A module's row has no star to set, and carrying it
+                // would put the heart on a track nothing can record — see
+                // [SourceStream.matchedServerSong].
+                matchedServerSong = match.takeIf { source is ServerLibrary },
             )
             val served = stream.format
             if (!wantsLossless || served.isLossless == true || served.isDolbyAtmos || served.statesNothingLossy) {

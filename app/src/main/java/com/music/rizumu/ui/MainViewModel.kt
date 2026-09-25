@@ -13,6 +13,7 @@ import com.music.rizumu.auth.adjacentProfile
 import com.music.rizumu.data.AppUpdateChecker
 import com.music.rizumu.data.LocalMediaRepository
 import com.music.rizumu.data.LikeState
+import com.music.rizumu.data.ServerCopy
 import com.music.rizumu.data.ServerLikeState
 import com.music.rizumu.data.ServerStarQueue
 import com.music.rizumu.data.YtMusicRepository
@@ -1307,6 +1308,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     .filter { previous[it] != current[it] }
                     .forEach { configId ->
                         ServerLikeState.forget(configId)
+                        // The row a heart would write to belongs to the old
+                        // account too — see [ServerCopy]. Track keys carry the
+                        // config id and survive an edit, so without this the
+                        // next account would inherit the last one's matches.
+                        ServerCopy.forgetSource(configId)
                         val prefix = "srcb:$configId::"
                         serverDiscoveryArtwork.clear(prefix)
                         serverDiscoveryArtworkInFlight.removeIf { it.startsWith(prefix) }

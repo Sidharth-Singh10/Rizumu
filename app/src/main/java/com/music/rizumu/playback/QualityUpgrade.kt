@@ -4,6 +4,7 @@ import android.net.Uri
 import android.util.Log
 import com.music.rizumu.data.TrackLog
 import com.music.rizumu.data.NerdStats
+import com.music.rizumu.data.ServerCopy
 import com.music.rizumu.data.sources.SourceResolver
 import com.music.rizumu.data.sources.SourceStream
 import com.music.rizumu.data.sources.StreamFormat
@@ -642,6 +643,11 @@ object QualityUpgrade {
     /** Parks [stream] for [mediaId], to be picked up when the item is reopened. */
     fun force(mediaId: String, stream: SourceStream) {
         forced[mediaId] = stream
+        // An upgrade that came from a server is that server's row playing, so
+        // the heart beside the track can be that server's star — see
+        // [ServerCopy]. A module or addon upgrade carries none and clears
+        // whatever was there, which is right: nothing starrable is serving.
+        ServerCopy.record(mediaId, stream.matchedServerSong)
     }
 
     /**
